@@ -175,11 +175,22 @@ static unsigned char ExtractChannel(DWORD pixel, DWORD mask) {
     return (unsigned char)(value * 255 / ((1 << bits) - 1));
 }
 
+static DWORD BppFromMasks(const DDPIXELFORMAT& pf) {
+    DWORD allMasks = pf.dwRBitMask | pf.dwGBitMask | pf.dwBBitMask | pf.dwRGBAlphaBitMask;
+    if (allMasks == 0) return 0;
+    int highBit = 0;
+    while (allMasks >> highBit) highBit++;
+    return (highBit <= 8) ? 8 : (highBit <= 16) ? 16 : 32;
+}
+
 static void ConvertToRGBA(const void* src, std::vector<unsigned char>& dst,
                           DWORD w, DWORD h, DWORD pitch, const DDPIXELFORMAT& fmt) {
     dst.resize(w * h * 4);
     DWORD bpp = fmt.dwRGBBitCount;
-    if (bpp == 0) bpp = 32;
+    if (bpp == 0) {
+        bpp = BppFromMasks(fmt);
+        if (bpp == 0) bpp = 32;
+    }
 
     for (DWORD y = 0; y < h; y++) {
         const unsigned char* row = (const unsigned char*)src + y * pitch;
@@ -199,7 +210,7 @@ static void ConvertToRGBA(const void* src, std::vector<unsigned char>& dst,
     }
 }
 
-static bool UploadCompressed(GLuint texId, DWORD w, DWORD h,
+static bool UploadCompressed(GLuint texId, int level, DWORD w, DWORD h,
                              const void* data, const DDPIXELFORMAT& fmt) {
     if (!pfnCompressedTexImage2D) return false;
     if (!(fmt.dwFlags & DDPF_FOURCC)) return false;
@@ -218,17 +229,17 @@ static bool UploadCompressed(GLuint texId, DWORD w, DWORD h,
     GLsizei size = bw * bh * blockSize;
 
     glBindTexture(GL_TEXTURE_2D, texId);
-    pfnCompressedTexImage2D(GL_TEXTURE_2D, 0, glFmt, w, h, 0, size, data);
+    pfnCompressedTexImage2D(GL_TEXTURE_2D, level, glFmt, w, h, 0, size, data);
     return true;
 }
 
-static void UploadUncompressed(GLuint texId, DWORD w, DWORD h,
+static void UploadUncompressed(GLuint texId, int level, DWORD w, DWORD h,
                                const void* data, DWORD pitch, const DDPIXELFORMAT& fmt) {
     std::vector<unsigned char> rgba;
     ConvertToRGBA(data, rgba, w, h, pitch, fmt);
 
     glBindTexture(GL_TEXTURE_2D, texId);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+    glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, w, h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
 }
 
@@ -249,12 +260,12 @@ GLuint UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPI
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 
     if (fmt.dwFlags & DDPF_FOURCC) {
-        if (!UploadCompressed(texId, w, h, data, fmt)) {
+        if (!UploadCompressed(texId, 0, w, h, data, fmt)) {
             glDeleteTextures(1, &texId);
             return 0;
         }
     } else {
-        UploadUncompressed(texId, w, h, data, pitch, fmt);
+        UploadUncompressed(texId, 0, w, h, data, pitch, fmt);
     }
 
     return texId;
@@ -264,10 +275,28 @@ void UpdateTexture(GLuint texId, DWORD w, DWORD h, const void* data, DWORD pitch
     if (!texId || !data || w == 0 || h == 0) return;
 
     if (fmt.dwFlags & DDPF_FOURCC) {
-        UploadCompressed(texId, w, h, data, fmt);
+        UploadCompressed(texId, 0, w, h, data, fmt);
     } else {
-        UploadUncompressed(texId, w, h, data, pitch, fmt);
+        UploadUncompressed(texId, 0, w, h, data, pitch, fmt);
     }
+}
+
+void UploadTextureMipLevel(GLuint texId, int level, DWORD w, DWORD h,
+                           const void* data, DWORD pitch, const DDPIXELFORMAT& fmt) {
+    if (!texId || !data || w == 0 || h == 0) return;
+
+    if (fmt.dwFlags & DDPF_FOURCC) {
+        UploadCompressed(texId, level, w, h, data, fmt);
+    } else {
+        UploadUncompressed(texId, level, w, h, data, pitch, fmt);
+    }
+}
+
+void SetTextureMipmapParams(GLuint texId, int mipCount) {
+    if (!texId || mipCount <= 0) return;
+    glBindTexture(GL_TEXTURE_2D, texId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mipCount);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 }
 
 void FreeTexture(GLuint texId) {

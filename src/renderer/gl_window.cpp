@@ -2,6 +2,9 @@
 #include <GL/gl.h>
 #include <cstdio>
 
+typedef BOOL (APIENTRY *PFNWGLSWAPINTERVALEXTPROC)(int interval);
+static PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT = nullptr;
+
 static HWND g_gothicHwnd = nullptr;
 static WNDPROC g_origGothicWndProc = nullptr;
 static HWND g_hwnd = nullptr;
@@ -10,6 +13,7 @@ static HGLRC g_hglrc = nullptr;
 static bool g_initialized = false;
 static volatile bool g_ready = false;
 static volatile bool g_running = false;
+static bool g_swapIntervalSet = false;
 static HANDLE g_thread = nullptr;
 static HANDLE g_readyEvent = nullptr;
 
@@ -31,10 +35,6 @@ static LRESULT CALLBACK GothicSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
     }
     case WM_STYLECHANGING:
     case WM_DISPLAYCHANGE:
-        return 0;
-    case WM_ACTIVATE:
-    case WM_ACTIVATEAPP:
-    case WM_SETFOCUS:
         return 0;
     case WM_NCACTIVATE:
         return CallWindowProcA(g_origGothicWndProc, hwnd, msg, FALSE, lp);
@@ -153,14 +153,19 @@ static DWORD WINAPI GLThreadProc(LPVOID) {
     printf("[GOpenGL] OpenGL context created: %s\n", (const char*)glGetString(GL_RENDERER));
     fflush(stdout);
 
-    // Release context so the game thread can acquire it
+    wglSwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
+    if (wglSwapIntervalEXT) {
+        wglSwapIntervalEXT(0);
+        printf("[GOpenGL] VSync disabled (swap interval = 0)\n");
+        fflush(stdout);
+    }
+
     wglMakeCurrent(nullptr, nullptr);
 
     g_running = true;
     g_ready = true;
     SetEvent(g_readyEvent);
 
-    // Message pump only -- no rendering on this thread
     while (g_running) {
         MSG msg;
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -207,15 +212,24 @@ void GOpenGL_OnSetWindow(HWND hwnd) {
 
 bool GOpenGL_AcquireContext() {
     if (!g_ready || !g_hdc || !g_hglrc) return false;
-    return wglMakeCurrent(g_hdc, g_hglrc) == TRUE;
+    if (wglMakeCurrent(g_hdc, g_hglrc) != TRUE) return false;
+
+    if (!g_swapIntervalSet) {
+        g_swapIntervalSet = true;
+        if (!wglSwapIntervalEXT)
+            wglSwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
+        if (wglSwapIntervalEXT) {
+            wglSwapIntervalEXT(0);
+            printf("[GOpenGL] VSync disabled from game thread (swap interval = 0)\n");
+            fflush(stdout);
+        }
+    }
+    return true;
 }
 
 void GOpenGL_OnPresent() {
-    if (!g_initialized) return;
-
-    if (g_hdc) {
-        SwapBuffers(g_hdc);
-    }
+    if (!g_initialized || !g_hdc || !g_hwnd) return;
+    SwapBuffers(g_hdc);
 }
 
 void GOpenGL_StopOpenGL() {

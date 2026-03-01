@@ -107,6 +107,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateSurface(LPDDSURFACEDESC2 d, LPD
             DWORD mw = tw / 2, mh = th / 2;
             while (mw >= 1 && mh >= 1) {
                 auto* mip = new StubDirectDrawSurface7("mip");
+                mip->isMipSurface = true;
                 if (d) mip->SetDesc(d);
                 if (!isFourCC) {
                     mip->InitAsRGB(mw, mh, tbpp);

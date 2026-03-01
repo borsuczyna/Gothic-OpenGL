@@ -16,11 +16,13 @@ class StubDirectDrawSurface7 : public IDirectDrawSurface7 {
 
     unsigned int glTextureId = 0;
     bool textureDirty = false;
+    bool hasData = false;
 
     void EnsureSurfaceBuffer();
 
 public:
     bool isPrimary = false;
+    bool isMipSurface = false;
     explicit StubDirectDrawSurface7(const char* surfaceTag = "surface");
     ~StubDirectDrawSurface7();
 
@@ -32,8 +34,11 @@ public:
 
     void UploadTextureToGL();
     unsigned int GetGLTextureId() const { return glTextureId; }
-    bool IsTextureDirty() const { return textureDirty; }
+    bool IsTextureDirty() const;
     const DDSURFACEDESC2& GetDescRef() const { return desc; }
+    const std::vector<unsigned char>& GetSurfaceData() const { return surfaceData; }
+    bool HasData() const { return hasData; }
+    StubDirectDrawSurface7* GetAttachedMip() const;
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void** ppv) override;
     ULONG   STDMETHODCALLTYPE AddRef() override;

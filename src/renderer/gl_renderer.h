@@ -23,6 +23,14 @@
 #define GL_TEXTURE_MAX_LEVEL 0x813D
 #endif
 
+#ifndef GL_LINEAR_MIPMAP_LINEAR
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#endif
+
+#ifndef GL_LINEAR_MIPMAP_NEAREST
+#define GL_LINEAR_MIPMAP_NEAREST 0x2701
+#endif
+
 namespace GLRenderer {
 
 void Init();
@@ -33,6 +41,8 @@ void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil);
 
 GLuint UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt);
 void   UpdateTexture(GLuint texId, DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt);
+void   UploadTextureMipLevel(GLuint texId, int level, DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt);
+void   SetTextureMipmapParams(GLuint texId, int mipCount);
 void   FreeTexture(GLuint texId);
 
 void BindTexture(GLuint texId);

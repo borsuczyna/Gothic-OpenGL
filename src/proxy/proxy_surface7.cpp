@@ -49,6 +49,14 @@ void StubDirectDrawSurface7::SetDesc(LPDDSURFACEDESC2 d) {
     }
 }
 
+static DWORD BppFromMasks(const DDPIXELFORMAT& pf) {
+    DWORD allMasks = pf.dwRBitMask | pf.dwGBitMask | pf.dwBBitMask | pf.dwRGBAlphaBitMask;
+    if (allMasks == 0) return 0;
+    int highBit = 0;
+    while (allMasks >> highBit) highBit++;
+    return (highBit <= 8) ? 8 : (highBit <= 16) ? 16 : 32;
+}
+
 void StubDirectDrawSurface7::InitAsRGB(DWORD w, DWORD h, DWORD bpp) {
     desc.dwWidth = w;
     desc.dwHeight = h;
@@ -59,6 +67,8 @@ void StubDirectDrawSurface7::InitAsRGB(DWORD w, DWORD h, DWORD bpp) {
                      desc.ddpfPixelFormat.dwBBitMask) != 0;
 
     if (hasMasks) {
+        DWORD actualBpp = BppFromMasks(desc.ddpfPixelFormat);
+        if (actualBpp > 0) bpp = actualBpp;
         desc.ddpfPixelFormat.dwFlags |= DDPF_RGB;
         desc.ddpfPixelFormat.dwRGBBitCount = bpp;
     } else {
@@ -107,24 +117,79 @@ void StubDirectDrawSurface7::AttachBackBuffer(StubDirectDrawSurface7* bb) {
     if (attached) attached->AddRef();
 }
 
-void StubDirectDrawSurface7::UploadTextureToGL() {
-    if (!textureDirty) return;
-    textureDirty = false;
+bool StubDirectDrawSurface7::IsTextureDirty() const {
+    if (textureDirty) return true;
+    StubDirectDrawSurface7* mip = const_cast<StubDirectDrawSurface7*>(this)->GetAttachedMip();
+    while (mip) {
+        if (mip->textureDirty) return true;
+        mip = mip->GetAttachedMip();
+    }
+    return false;
+}
 
+StubDirectDrawSurface7* StubDirectDrawSurface7::GetAttachedMip() const {
+    if (attached && attached->isMipSurface) return attached;
+    return nullptr;
+}
+
+void StubDirectDrawSurface7::UploadTextureToGL() {
     if (surfaceData.empty() || desc.dwWidth == 0 || desc.dwHeight == 0) return;
+
+    bool anyDirty = textureDirty;
+    StubDirectDrawSurface7* m = GetAttachedMip();
+    while (m && !anyDirty) {
+        anyDirty = m->textureDirty;
+        m = m->GetAttachedMip();
+    }
+    if (!anyDirty) return;
 
     if (glTextureId == 0) {
         glTextureId = GLRenderer::UploadTexture(
             desc.dwWidth, desc.dwHeight,
             surfaceData.data(), desc.lPitch,
             desc.ddpfPixelFormat);
+        if (glTextureId) {
+            int uploadedLevels = 0;
+            int level = 1;
+            for (auto* mip = GetAttachedMip(); mip; mip = mip->GetAttachedMip(), level++) {
+                if (!mip->HasData()) break;
+                const auto& md = mip->GetDescRef();
+                const auto& sd = mip->GetSurfaceData();
+                GLRenderer::UploadTextureMipLevel(glTextureId, level,
+                    md.dwWidth, md.dwHeight, sd.data(), md.lPitch, md.ddpfPixelFormat);
+                mip->textureDirty = false;
+                uploadedLevels = level;
+            }
+            if (uploadedLevels > 0) {
+                GLRenderer::SetTextureMipmapParams(glTextureId, uploadedLevels);
+            }
+        }
     } else {
-        GLRenderer::UpdateTexture(
-            glTextureId,
-            desc.dwWidth, desc.dwHeight,
-            surfaceData.data(), desc.lPitch,
-            desc.ddpfPixelFormat);
+        if (textureDirty) {
+            GLRenderer::UpdateTexture(glTextureId,
+                desc.dwWidth, desc.dwHeight,
+                surfaceData.data(), desc.lPitch,
+                desc.ddpfPixelFormat);
+        }
+        int uploadedLevels = 0;
+        int level = 1;
+        for (auto* mip = GetAttachedMip(); mip; mip = mip->GetAttachedMip(), level++) {
+            if (!mip->HasData()) break;
+            if (mip->textureDirty) {
+                const auto& md = mip->GetDescRef();
+                const auto& sd = mip->GetSurfaceData();
+                GLRenderer::UploadTextureMipLevel(glTextureId, level,
+                    md.dwWidth, md.dwHeight, sd.data(), md.lPitch, md.ddpfPixelFormat);
+                mip->textureDirty = false;
+            }
+            uploadedLevels = level;
+        }
+        if (uploadedLevels > 0) {
+            GLRenderer::SetTextureMipmapParams(glTextureId, uploadedLevels);
+        }
     }
+
+    textureDirty = false;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::QueryInterface(REFIID, void** ppv) {
@@ -270,6 +335,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetPalette(LPDIRECTDRAWPALETTE
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Unlock(LPRECT) {
     textureDirty = true;
+    hasData = true;
     return S_OK;
 }
 
@@ -292,6 +358,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetSurfaceDesc(LPDDSURFACEDESC
             memcpy(surfaceData.data(), gameSurface, surfaceData.size());
         }
         textureDirty = true;
+        hasData = true;
     }
     return S_OK;
 }
