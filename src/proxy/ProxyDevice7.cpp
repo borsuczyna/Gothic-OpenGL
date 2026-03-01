@@ -1,8 +1,8 @@
-#include "proxy_device7.h"
-#include "proxy_surface7.h"
-#include "../debug.h"
-#include "../renderer/vk_renderer.h"
-#include "../renderer/vk_window.h"
+#include "ProxyDevice7.h"
+#include "ProxySurface7.h"
+#include "../Debug.h"
+#include "../renderer/VkRenderer.h"
+#include "../renderer/VkWindow.h"
 #include <cstring>
 #include <cstdio>
 

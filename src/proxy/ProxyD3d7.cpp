@@ -1,7 +1,7 @@
-#include "proxy_d3d7.h"
-#include "proxy_device7.h"
-#include "proxy_vertexbuffer7.h"
-#include "../debug.h"
+#include "ProxyD3d7.h"
+#include "ProxyDevice7.h"
+#include "ProxyVertexBuffer7.h"
+#include "../Debug.h"
 
 HRESULT STDMETHODCALLTYPE StubDirect3D7::QueryInterface(REFIID, void** ppv) { *ppv = this; AddRef(); return S_OK; }
 ULONG   STDMETHODCALLTYPE StubDirect3D7::AddRef() { return ++refCount; }

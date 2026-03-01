@@ -6,13 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(ddraw SHARED
     src/dllmain.cpp
-    src/renderer/vk_window.cpp
-    src/renderer/vk_renderer.cpp
+    src/renderer/VkWindow.cpp
+    src/renderer/VkRenderer.cpp
+    src/renderer/Pipeline.cpp
+    src/renderer/TextureUtils.cpp
     src/renderer/volk/volk.c
-    src/proxy/proxy_surface7.cpp
-    src/proxy/proxy_device7.cpp
-    src/proxy/proxy_d3d7.cpp
-    src/proxy/proxy_ddraw7.cpp
+    src/proxy/ProxySurface7.cpp
+    src/proxy/ProxyDevice7.cpp
+    src/proxy/ProxyD3d7.cpp
+    src/proxy/ProxyDdraw7.cpp
     ddraw.def
 )
 

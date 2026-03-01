@@ -1,8 +1,8 @@
 #include <windows.h>
 #include <cstdio>
-#include "renderer/vk_window.h"
-#include "renderer/vk_renderer.h"
-#include "proxy/proxy_ddraw7.h"
+#include "renderer/VkWindow.h"
+#include "renderer/VkRenderer.h"
+#include "proxy/ProxyDdraw7.h"
 
 struct RealDDraw {
     HMODULE dll;

@@ -1,47 +1,14 @@
-#include "vk_renderer.h"
-#include "../debug.h"
-#include "../shaders/gothic_shaders.h"
+#include "VkRenderer.h"
+#include "Types.h"
+#include "Pipeline.h"
+#include "TextureUtils.h"
+#include "../Debug.h"
+#include "../shaders/GothicShaders.h"
 #include <vector>
 #include <cstring>
 #include <unordered_map>
 
-struct GVertex {
-    float    x, y, z;
-    uint32_t color;
-    float    u, v;
-    float    u2, v2;
-};
-
-struct PushConstants {
-    float    mvp[16];
-    uint32_t flags;
-    float    alphaRef;
-    uint32_t stage0ColorOp;
-    uint32_t stage1ColorOp;
-    uint32_t stage0Args;    // low 16 = colorArg1, high 16 = colorArg2
-    uint32_t stage1Args;
-    uint32_t texCoordIdx;   // low 16 = stage0 UV index, high 16 = stage1 UV index
-};
-
-struct PipelineKey {
-    uint8_t blendEnabled;
-    uint8_t depthTestEnabled;
-    uint8_t depthWriteEnabled;
-    uint8_t depthFunc;
-    uint8_t srcBlend;
-    uint8_t dstBlend;
-    uint8_t pad0, pad1;
-
-    bool operator==(const PipelineKey& o) const { return memcmp(this, &o, sizeof(*this)) == 0; }
-};
-
-struct PipelineKeyHash {
-    size_t operator()(const PipelineKey& k) const {
-        uint64_t v;
-        memcpy(&v, &k, sizeof(v));
-        return std::hash<uint64_t>()(v);
-    }
-};
+using namespace gvlk;
 
 namespace VkRenderer {
 
@@ -114,7 +81,7 @@ static VkDescriptorSetLayout s_descSetLayout = VK_NULL_HANDLE;
 static VkPipelineLayout      s_pipelineLayout = VK_NULL_HANDLE;
 static VkDescriptorPool      s_descPool       = VK_NULL_HANDLE;
 
-static std::unordered_map<PipelineKey, VkPipeline, PipelineKeyHash> s_pipelineCache;
+static PipelineCache s_pipelineCache;
 
 static VkShaderModule s_vertModule = VK_NULL_HANDLE;
 static VkShaderModule s_fragModule = VK_NULL_HANDLE;
@@ -188,112 +155,8 @@ static VkBlendFactor D3DBlendToVk(DWORD blend) {
 }
 
 static VkPipeline GetOrCreatePipeline(const PipelineKey& key) {
-    auto it = s_pipelineCache.find(key);
-    if (it != s_pipelineCache.end()) return it->second;
-
-    VkDevice device = GVulkan_GetDevice();
-
-    VkPipelineShaderStageCreateInfo stages[2] = {};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = s_vertModule;
-    stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = s_fragModule;
-    stages[1].pName = "main";
-
-    VkVertexInputBindingDescription binding = {};
-    binding.binding = 0;
-    binding.stride = sizeof(GVertex);
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    VkVertexInputAttributeDescription attrs[4] = {};
-    attrs[0].location = 0; attrs[0].binding = 0; attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT; attrs[0].offset = offsetof(GVertex, x);
-    attrs[1].location = 1; attrs[1].binding = 0; attrs[1].format = VK_FORMAT_R32_UINT;         attrs[1].offset = offsetof(GVertex, color);
-    attrs[2].location = 2; attrs[2].binding = 0; attrs[2].format = VK_FORMAT_R32G32_SFLOAT;    attrs[2].offset = offsetof(GVertex, u);
-    attrs[3].location = 3; attrs[3].binding = 0; attrs[3].format = VK_FORMAT_R32G32_SFLOAT;    attrs[3].offset = offsetof(GVertex, u2);
-
-    VkPipelineVertexInputStateCreateInfo vertexInput = {};
-    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = 4;
-    vertexInput.pVertexAttributeDescriptions = attrs;
-
-    VkPipelineInputAssemblyStateCreateInfo inputAsm = {};
-    inputAsm.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAsm.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo vpState = {};
-    vpState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    vpState.viewportCount = 1;
-    vpState.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo raster = {};
-    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;
-    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
-    raster.lineWidth = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo msaa = {};
-    msaa.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    msaa.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil = {};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = key.depthTestEnabled ? VK_TRUE : VK_FALSE;
-    depthStencil.depthWriteEnable = key.depthWriteEnabled ? VK_TRUE : VK_FALSE;
-    depthStencil.depthCompareOp = D3DCmpToVk(key.depthFunc);
-
-    VkPipelineColorBlendAttachmentState blendAtt = {};
-    blendAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    blendAtt.blendEnable = key.blendEnabled ? VK_TRUE : VK_FALSE;
-    blendAtt.srcColorBlendFactor = D3DBlendToVk(key.srcBlend);
-    blendAtt.dstColorBlendFactor = D3DBlendToVk(key.dstBlend);
-    blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = D3DBlendToVk(key.srcBlend);
-    blendAtt.dstAlphaBlendFactor = D3DBlendToVk(key.dstBlend);
-    blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
-
-    VkPipelineColorBlendStateCreateInfo blendState = {};
-    blendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blendState.attachmentCount = 1;
-    blendState.pAttachments = &blendAtt;
-
-    VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-    VkPipelineDynamicStateCreateInfo dynState = {};
-    dynState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynState.dynamicStateCount = 2;
-    dynState.pDynamicStates = dynStates;
-
-    VkGraphicsPipelineCreateInfo pci = {};
-    pci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pci.stageCount = 2;
-    pci.pStages = stages;
-    pci.pVertexInputState = &vertexInput;
-    pci.pInputAssemblyState = &inputAsm;
-    pci.pViewportState = &vpState;
-    pci.pRasterizationState = &raster;
-    pci.pMultisampleState = &msaa;
-    pci.pDepthStencilState = &depthStencil;
-    pci.pColorBlendState = &blendState;
-    pci.pDynamicState = &dynState;
-    pci.layout = s_pipelineLayout;
-    pci.renderPass = GVulkan_GetRenderPass();
-    pci.subpass = 0;
-
-    VkPipeline pipeline;
-    VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pci, nullptr, &pipeline);
-    if (result != VK_SUCCESS) {
-        DbgPrint("ERROR: vkCreateGraphicsPipelines failed (%d)", result);
-        return VK_NULL_HANDLE;
-    }
-
-    s_pipelineCache[key] = pipeline;
-    return pipeline;
+    return s_pipelineCache.getOrCreate(key, GVulkan_GetDevice(), GVulkan_GetRenderPass(),
+                                      s_pipelineLayout, s_vertModule, s_fragModule);
 }
 
 static void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memUsage,
@@ -707,8 +570,7 @@ void Shutdown() {
     if (s_whiteTex.sampler) vkDestroySampler(device, s_whiteTex.sampler, nullptr);
     if (s_whiteTex.image)   vmaDestroyImage(GVulkan_GetAllocator(), s_whiteTex.image, s_whiteTex.alloc);
 
-    for (auto& [key, pipe] : s_pipelineCache) vkDestroyPipeline(device, pipe, nullptr);
-    s_pipelineCache.clear();
+    s_pipelineCache.clear(device);
 
     if (s_defaultSampler)   vkDestroySampler(device, s_defaultSampler, nullptr);
     if (s_pipelineLayout)   vkDestroyPipelineLayout(device, s_pipelineLayout, nullptr);

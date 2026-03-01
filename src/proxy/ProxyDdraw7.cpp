@@ -1,9 +1,9 @@
-#include "proxy_ddraw7.h"
-#include "proxy_d3d7.h"
-#include "proxy_surface7.h"
-#include "proxy_clipper.h"
-#include "../debug.h"
-#include "../renderer/vk_window.h"
+#include "ProxyDdraw7.h"
+#include "ProxyD3d7.h"
+#include "ProxySurface7.h"
+#include "ProxyClipper.h"
+#include "../Debug.h"
+#include "../renderer/VkWindow.h"
 #include <cstring>
 
 StubDirectDraw7::StubDirectDraw7() {

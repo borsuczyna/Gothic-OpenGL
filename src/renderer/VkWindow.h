@@ -3,8 +3,8 @@
 #ifndef VK_USE_PLATFORM_WIN32_KHR
 #define VK_USE_PLATFORM_WIN32_KHR
 #endif
-#include "volk/volk.h"
 
+#include "volk/volk.h"
 #include "vk_mem_alloc.h"
 #include <windows.h>
 
@@ -19,14 +19,14 @@ int  GVulkan_GetWindowHeight();
 int  GVulkan_GetGameWidth();
 int  GVulkan_GetGameHeight();
 
-VkDevice         GVulkan_GetDevice();
-VkPhysicalDevice GVulkan_GetPhysicalDevice();
-VkRenderPass     GVulkan_GetRenderPass();
-VkExtent2D       GVulkan_GetSwapExtent();
-VmaAllocator     GVulkan_GetAllocator();
-VkQueue          GVulkan_GetGraphicsQueue();
-uint32_t         GVulkan_GetGraphicsFamily();
-VkFormat         GVulkan_GetDepthFormat();
+VkDevice          GVulkan_GetDevice();
+VkPhysicalDevice  GVulkan_GetPhysicalDevice();
+VkRenderPass      GVulkan_GetRenderPass();
+VkExtent2D        GVulkan_GetSwapExtent();
+VmaAllocator      GVulkan_GetAllocator();
+VkQueue           GVulkan_GetGraphicsQueue();
+uint32_t          GVulkan_GetGraphicsFamily();
+VkFormat          GVulkan_GetDepthFormat();
 
 bool GVulkan_BeginFrame(VkCommandBuffer cmd);
 void GVulkan_EndFrame(VkCommandBuffer cmd);

@@ -1,6 +1,6 @@
-#include "proxy_surface7.h"
-#include "../debug.h"
-#include "../renderer/vk_renderer.h"
+#include "ProxySurface7.h"
+#include "../Debug.h"
+#include "../renderer/VkRenderer.h"
 #include <cstring>
 
 static bool g_framePresentedByFlip = false;
