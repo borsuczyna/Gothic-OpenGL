@@ -9,12 +9,18 @@ struct GVertex {
     float    x, y, z;
     uint32_t color;
     float    u, v;
+    float    u2, v2;
 };
 
 struct PushConstants {
     float    mvp[16];
     uint32_t flags;
     float    alphaRef;
+    uint32_t stage0ColorOp;
+    uint32_t stage1ColorOp;
+    uint32_t stage0Args;    // low 16 = colorArg1, high 16 = colorArg2
+    uint32_t stage1Args;
+    uint32_t texCoordIdx;   // low 16 = stage0 UV index, high 16 = stage1 UV index
 };
 
 struct PipelineKey {
@@ -61,6 +67,17 @@ static bool  s_depthWriteEnabled = true;
 static DWORD s_depthFunc        = D3DCMP_LESSEQUAL;
 
 static VkTexHandle* s_boundTexture = nullptr;
+static VkTexHandle* s_boundTexture2 = nullptr;
+static DWORD s_stage0ColorOp = 4; // D3DTOP_MODULATE
+static DWORD s_stage1ColorOp = 1; // D3DTOP_DISABLE
+static DWORD s_stage0Arg1 = 2;    // D3DTA_TEXTURE
+static DWORD s_stage0Arg2 = 0;    // D3DTA_DIFFUSE
+static DWORD s_stage1Arg1 = 2;    // D3DTA_TEXTURE
+static DWORD s_stage1Arg2 = 1;    // D3DTA_CURRENT
+static DWORD s_stage1AddrU = D3DTADDRESS_WRAP;
+static DWORD s_stage1AddrV = D3DTADDRESS_WRAP;
+static DWORD s_stage0TexCoordIdx = 0;
+static DWORD s_stage1TexCoordIdx = 0;
 
 static VkCommandPool   s_cmdPool = VK_NULL_HANDLE;
 static const int MAX_FRAMES = 2;
@@ -191,16 +208,17 @@ static VkPipeline GetOrCreatePipeline(const PipelineKey& key) {
     binding.stride = sizeof(GVertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attrs[3] = {};
+    VkVertexInputAttributeDescription attrs[4] = {};
     attrs[0].location = 0; attrs[0].binding = 0; attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT; attrs[0].offset = offsetof(GVertex, x);
     attrs[1].location = 1; attrs[1].binding = 0; attrs[1].format = VK_FORMAT_R32_UINT;         attrs[1].offset = offsetof(GVertex, color);
     attrs[2].location = 2; attrs[2].binding = 0; attrs[2].format = VK_FORMAT_R32G32_SFLOAT;    attrs[2].offset = offsetof(GVertex, u);
+    attrs[3].location = 3; attrs[3].binding = 0; attrs[3].format = VK_FORMAT_R32G32_SFLOAT;    attrs[3].offset = offsetof(GVertex, u2);
 
     VkPipelineVertexInputStateCreateInfo vertexInput = {};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.vertexAttributeDescriptionCount = 4;
     vertexInput.pVertexAttributeDescriptions = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo inputAsm = {};
@@ -645,10 +663,12 @@ void Init() {
     pcRange.offset = 0;
     pcRange.size = sizeof(PushConstants);
 
+    VkDescriptorSetLayout setLayouts[2] = { s_descSetLayout, s_descSetLayout };
+
     VkPipelineLayoutCreateInfo plci = {};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plci.setLayoutCount = 1;
-    plci.pSetLayouts = &s_descSetLayout;
+    plci.setLayoutCount = 2;
+    plci.pSetLayouts = setLayouts;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcRange;
     vkCreatePipelineLayout(device, &plci, nullptr, &s_pipelineLayout);
@@ -935,6 +955,10 @@ void BindTexture(VkTexHandle* tex) {
     s_boundTexture = tex;
 }
 
+void BindTexture2(VkTexHandle* tex) {
+    s_boundTexture2 = tex;
+}
+
 void SetAlphaBlendEnabled(bool enabled) { s_blendEnabled = enabled; }
 void SetBlendFunc(DWORD src, DWORD dst) { s_srcBlend = src; s_dstBlend = dst; }
 void SetAlphaTestEnabled(bool enabled)  { s_alphaTestEnabled = enabled; }
@@ -942,6 +966,31 @@ void SetAlphaRef(DWORD ref)             { s_alphaRef = ref; }
 void SetDepthEnabled(bool enabled)      { s_depthEnabled = enabled; }
 void SetDepthWriteEnabled(bool enabled) { s_depthWriteEnabled = enabled; }
 void SetDepthFunc(DWORD func)           { s_depthFunc = func; }
+
+void SetStageColorOp(int stage, DWORD op) {
+    if (stage == 0) s_stage0ColorOp = op;
+    else if (stage == 1) s_stage1ColorOp = op;
+}
+
+void SetStageColorArg(int stage, int argIndex, DWORD value) {
+    value &= 0xF;
+    if (stage == 0) {
+        if (argIndex == 1) s_stage0Arg1 = value;
+        else               s_stage0Arg2 = value;
+    } else if (stage == 1) {
+        if (argIndex == 1) s_stage1Arg1 = value;
+        else               s_stage1Arg2 = value;
+    }
+}
+
+void SetTextureAddress2U(DWORD d3dAddr) { s_stage1AddrU = d3dAddr; }
+void SetTextureAddress2V(DWORD d3dAddr) { s_stage1AddrV = d3dAddr; }
+
+void SetStageTexCoordIndex(int stage, DWORD value) {
+    DWORD uvIdx = (value > 7) ? 0 : value;
+    if (stage == 0) s_stage0TexCoordIdx = uvIdx;
+    else if (stage == 1) s_stage1TexCoordIdx = uvIdx;
+}
 
 void SetWorldMatrix(const float* m)      { memcpy(s_worldMatrix, m, 64); }
 void SetViewMatrix(const float* m)       { memcpy(s_viewMatrix, m, 64); }
@@ -953,6 +1002,12 @@ void SetViewport(DWORD x, DWORD y, DWORD w, DWORD h) {
 
 void SetTextureAddressU(DWORD d3dAddr) { s_addressU = d3dAddr; }
 void SetTextureAddressV(DWORD d3dAddr) { s_addressV = d3dAddr; }
+
+static int TexCoordFloats(DWORD fvf, int setIndex) {
+    static const int sizes[] = {2, 3, 4, 1};
+    int bits = (fvf >> (setIndex * 2 + 16)) & 3;
+    return sizes[bits];
+}
 
 static DWORD CalcFVFStride(DWORD fvf) {
     DWORD stride = 0;
@@ -968,7 +1023,9 @@ static DWORD CalcFVFStride(DWORD fvf) {
     if (fvf & D3DFVF_NORMAL)   stride += 12;
     if (fvf & D3DFVF_DIFFUSE)  stride += 4;
     if (fvf & D3DFVF_SPECULAR) stride += 4;
-    stride += ((fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT) * 8;
+    DWORD texCount = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    for (DWORD i = 0; i < texCount; i++)
+        stride += TexCoordFloats(fvf, i) * 4;
     return stride;
 }
 
@@ -1005,8 +1062,15 @@ static GVertex ConvertVertex(const unsigned char* ptr, DWORD fvf) {
 
     DWORD texCount = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
     if (texCount >= 1) {
-        v.u = *(float*)(ptr + off); off += 4;
-        v.v = *(float*)(ptr + off); off += 4;
+        int nf = TexCoordFloats(fvf, 0);
+        v.u = *(float*)(ptr + off);
+        v.v = (nf >= 2) ? *(float*)(ptr + off + 4) : 0.0f;
+        off += nf * 4;
+    }
+    if (texCount >= 2) {
+        int nf = TexCoordFloats(fvf, 1);
+        v.u2 = *(float*)(ptr + off);
+        v.v2 = (nf >= 2) ? *(float*)(ptr + off + 4) : 0.0f;
     }
 
     return v;
@@ -1127,7 +1191,13 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     pc.flags = 0;
     if (s_boundTexture) pc.flags |= 1;
     if (s_alphaTestEnabled) pc.flags |= 2;
+    if (s_boundTexture2 && s_stage1ColorOp > 1) pc.flags |= 4;
     pc.alphaRef = s_alphaRef / 255.0f;
+    pc.stage0ColorOp = s_stage0ColorOp;
+    pc.stage1ColorOp = s_stage1ColorOp;
+    pc.stage0Args = (s_stage0Arg2 << 16) | s_stage0Arg1;
+    pc.stage1Args = (s_stage1Arg2 << 16) | s_stage1Arg1;
+    pc.texCoordIdx = (s_stage1TexCoordIdx << 16) | s_stage0TexCoordIdx;
 
     PipelineKey key = {};
     key.blendEnabled = s_blendEnabled ? 1 : 0;
@@ -1145,10 +1215,12 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(PushConstants), &pc);
 
-    VkDescriptorSet descSet = s_boundTexture ? s_boundTexture->descSet : s_whiteTex.descSet;
-    if (descSet) {
+    VkDescriptorSet descSets[2];
+    descSets[0] = s_boundTexture ? s_boundTexture->descSet : s_whiteTex.descSet;
+    descSets[1] = s_boundTexture2 ? s_boundTexture2->descSet : s_whiteTex.descSet;
+    if (descSets[0] && descSets[1]) {
         vkCmdBindDescriptorSets(s_cmdBufs[s_frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                s_pipelineLayout, 0, 1, &descSet, 0, nullptr);
+                                s_pipelineLayout, 0, 2, descSets, 0, nullptr);
     }
 
     VkExtent2D ext = GVulkan_GetSwapExtent();

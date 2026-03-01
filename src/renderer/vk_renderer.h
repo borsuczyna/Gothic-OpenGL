@@ -33,6 +33,7 @@ void   SetTextureMipmapParams(VkTexHandle* tex, int mipCount);
 void   FreeTexture(VkTexHandle* tex);
 
 void BindTexture(VkTexHandle* tex);
+void BindTexture2(VkTexHandle* tex);
 void SetAlphaBlendEnabled(bool enabled);
 void SetBlendFunc(DWORD srcBlend, DWORD dstBlend);
 void SetAlphaTestEnabled(bool enabled);
@@ -40,6 +41,11 @@ void SetAlphaRef(DWORD ref);
 void SetDepthEnabled(bool enabled);
 void SetDepthWriteEnabled(bool enabled);
 void SetDepthFunc(DWORD d3dFunc);
+void SetStageColorOp(int stage, DWORD op);
+void SetStageColorArg(int stage, int argIndex, DWORD value);
+void SetStageTexCoordIndex(int stage, DWORD value);
+void SetTextureAddress2U(DWORD d3dAddr);
+void SetTextureAddress2V(DWORD d3dAddr);
 
 void SetWorldMatrix(const float* m);
 void SetViewMatrix(const float* m);
