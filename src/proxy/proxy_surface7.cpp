@@ -54,15 +54,29 @@ void StubDirectDrawSurface7::InitAsRGB(DWORD w, DWORD h, DWORD bpp) {
     desc.dwHeight = h;
     desc.dwFlags |= DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT | DDSD_PITCH | DDSD_CAPS;
     desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
-    desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
-    desc.ddpfPixelFormat.dwRGBBitCount = bpp;
-    if (bpp == 32) {
-        desc.ddpfPixelFormat.dwRBitMask = 0xFF0000;
-        desc.ddpfPixelFormat.dwGBitMask = 0xFF00;
-        desc.ddpfPixelFormat.dwBBitMask = 0xFF;
-        desc.ddpfPixelFormat.dwRGBAlphaBitMask = 0xFF000000;
-        desc.ddpfPixelFormat.dwFlags |= DDPF_ALPHAPIXELS;
+
+    bool hasMasks = (desc.ddpfPixelFormat.dwRBitMask | desc.ddpfPixelFormat.dwGBitMask |
+                     desc.ddpfPixelFormat.dwBBitMask) != 0;
+
+    if (hasMasks) {
+        desc.ddpfPixelFormat.dwFlags |= DDPF_RGB;
+        desc.ddpfPixelFormat.dwRGBBitCount = bpp;
+    } else {
+        desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
+        desc.ddpfPixelFormat.dwRGBBitCount = bpp;
+        if (bpp == 32) {
+            desc.ddpfPixelFormat.dwRBitMask = 0xFF0000;
+            desc.ddpfPixelFormat.dwGBitMask = 0xFF00;
+            desc.ddpfPixelFormat.dwBBitMask = 0xFF;
+            desc.ddpfPixelFormat.dwRGBAlphaBitMask = 0xFF000000;
+            desc.ddpfPixelFormat.dwFlags |= DDPF_ALPHAPIXELS;
+        } else if (bpp == 16) {
+            desc.ddpfPixelFormat.dwRBitMask = 0xF800;
+            desc.ddpfPixelFormat.dwGBitMask = 0x07E0;
+            desc.ddpfPixelFormat.dwBBitMask = 0x001F;
+        }
     }
+
     desc.lPitch = w * (bpp / 8);
     EnsureSurfaceBuffer();
 }
@@ -269,10 +283,14 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::PageUnlock(DWORD) { return S_O
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetSurfaceDesc(LPDDSURFACEDESC2 d, DWORD) {
     DbgPrint("  Surf[%s]::SetSurfaceDesc", tag);
     if (d) {
+        void* gameSurface = d->lpSurface;
         desc = *d;
         desc.dwSize = sizeof(DDSURFACEDESC2);
         surfaceData.clear();
         EnsureSurfaceBuffer();
+        if (gameSurface && !surfaceData.empty()) {
+            memcpy(surfaceData.data(), gameSurface, surfaceData.size());
+        }
         textureDirty = true;
     }
     return S_OK;

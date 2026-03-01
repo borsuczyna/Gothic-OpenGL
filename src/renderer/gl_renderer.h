@@ -19,6 +19,10 @@
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+#ifndef GL_TEXTURE_MAX_LEVEL
+#define GL_TEXTURE_MAX_LEVEL 0x813D
+#endif
+
 namespace GLRenderer {
 
 void Init();
@@ -44,6 +48,8 @@ void SetWorldMatrix(const float* m);
 void SetViewMatrix(const float* m);
 void SetProjectionMatrix(const float* m);
 void SetViewport(DWORD x, DWORD y, DWORD w, DWORD h);
+void SetTextureAddressU(DWORD d3dAddr);
+void SetTextureAddressV(DWORD d3dAddr);
 
 void DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices, DWORD count);
 void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,

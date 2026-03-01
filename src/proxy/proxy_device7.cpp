@@ -347,7 +347,25 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTexture(DWORD stage, LPDIRECTD
 }
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTextureStageState(DWORD, D3DTEXTURESTAGESTATETYPE, LPDWORD v) { if (v) *v = 0; return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTextureStageState(DWORD, D3DTEXTURESTAGESTATETYPE, DWORD) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value) {
+    if (stage > 0 || !contextAcquired) return S_OK;
+    switch (type) {
+    case D3DTSS_ADDRESS:
+        GLRenderer::SetTextureAddressU(value);
+        GLRenderer::SetTextureAddressV(value);
+        break;
+    case D3DTSS_ADDRESSU:
+        GLRenderer::SetTextureAddressU(value);
+        break;
+    case D3DTSS_ADDRESSV:
+        GLRenderer::SetTextureAddressV(value);
+        break;
+    default:
+        break;
+    }
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::ValidateDevice(LPDWORD p) { if (p) *p = 1; return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::ApplyStateBlock(DWORD) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::CaptureStateBlock(DWORD) { return S_OK; }

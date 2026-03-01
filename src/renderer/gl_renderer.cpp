@@ -235,6 +235,10 @@ static void UploadUncompressed(GLuint texId, DWORD w, DWORD h,
 GLuint UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt) {
     if (!data || w == 0 || h == 0) return 0;
 
+    DbgPrint("UploadTexture %ux%u pitch=%u bpp=%u flags=0x%X fourcc=0x%X R=0x%X G=0x%X B=0x%X A=0x%X",
+             w, h, pitch, fmt.dwRGBBitCount, fmt.dwFlags, fmt.dwFourCC,
+             fmt.dwRBitMask, fmt.dwGBitMask, fmt.dwBBitMask, fmt.dwRGBAlphaBitMask);
+
     GLuint texId = 0;
     glGenTextures(1, &texId);
     glBindTexture(GL_TEXTURE_2D, texId);
@@ -242,6 +246,7 @@ GLuint UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPI
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 
     if (fmt.dwFlags & DDPF_FOURCC) {
         if (!UploadCompressed(texId, w, h, data, fmt)) {
@@ -376,6 +381,27 @@ void SetViewport(DWORD x, DWORD y, DWORD w, DWORD h) {
     if (!s_in2DMode) {
         ApplyViewport3D();
     }
+}
+
+#ifndef GL_MIRRORED_REPEAT
+#define GL_MIRRORED_REPEAT 0x8370
+#endif
+
+static GLenum D3DAddrToGL(DWORD addr) {
+    switch (addr) {
+        case D3DTADDRESS_WRAP:       return GL_REPEAT;
+        case D3DTADDRESS_MIRROR:     return GL_MIRRORED_REPEAT;
+        case D3DTADDRESS_CLAMP:      return GL_CLAMP_TO_EDGE;
+        default:                     return GL_REPEAT;
+    }
+}
+
+void SetTextureAddressU(DWORD d3dAddr) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, D3DAddrToGL(d3dAddr));
+}
+
+void SetTextureAddressV(DWORD d3dAddr) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, D3DAddrToGL(d3dAddr));
 }
 
 // --- FVF helpers ---
