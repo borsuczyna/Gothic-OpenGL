@@ -13,6 +13,82 @@ static PFNGLCOMPRESSEDTEXIMAGE2DPROC pfnCompressedTexImage2D = nullptr;
 namespace GLRenderer {
 
 static bool s_initialized = false;
+static int s_windowW = 800, s_windowH = 600;
+static int s_gameW = 800, s_gameH = 600;
+
+static float s_worldMatrix[16];
+static float s_viewMatrix[16];
+static float s_projMatrix[16];
+static bool s_in2DMode = true;
+
+static DWORD s_vpX = 0, s_vpY = 0, s_vpW = 800, s_vpH = 600;
+
+static bool s_gameDepthEnabled = true;
+static bool s_gameDepthWriteEnabled = true;
+static DWORD s_gameDepthFunc = D3DCMP_LESSEQUAL;
+
+static void MakeIdentity(float* m) {
+    memset(m, 0, 16 * sizeof(float));
+    m[0] = m[5] = m[10] = m[15] = 1.0f;
+}
+
+static void AdjustProjD3DToGL(float* glProj) {
+    // D3D maps Z to [0,1], OpenGL to [-1,1].
+    // z_clip_gl = 2*z_clip_d3d - w_clip
+    // In GL column-major, z_clip is row 2 (indices 2,6,10,14),
+    // w_clip is row 3 (indices 3,7,11,15).
+    glProj[2]  = 2.0f * glProj[2]  - glProj[3];
+    glProj[6]  = 2.0f * glProj[6]  - glProj[7];
+    glProj[10] = 2.0f * glProj[10] - glProj[11];
+    glProj[14] = 2.0f * glProj[14] - glProj[15];
+}
+
+static void SetupFor2D() {
+    if (s_in2DMode) return;
+    s_in2DMode = true;
+    glViewport(0, 0, s_windowW, s_windowH);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, (double)s_gameW, (double)s_gameH, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+}
+
+static void ApplyViewport3D() {
+    float sx = (float)s_windowW / (float)s_gameW;
+    float sy = (float)s_windowH / (float)s_gameH;
+    int glX = (int)(s_vpX * sx);
+    int glW = (int)(s_vpW * sx);
+    int glH = (int)(s_vpH * sy);
+    int glY = s_windowH - (int)(s_vpY * sy) - glH;
+    glViewport(glX, glY, glW, glH);
+}
+
+static GLenum D3DCmpToGL(DWORD d3dFunc);
+
+static void SetupFor3D() {
+    if (!s_in2DMode) return;
+    s_in2DMode = false;
+
+    ApplyViewport3D();
+
+    float proj[16];
+    memcpy(proj, s_projMatrix, sizeof(proj));
+    AdjustProjD3DToGL(proj);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadMatrixf(proj);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadMatrixf(s_viewMatrix);
+    glMultMatrixf(s_worldMatrix);
+
+    if (s_gameDepthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    glDepthMask(s_gameDepthWriteEnabled ? GL_TRUE : GL_FALSE);
+    glDepthFunc(D3DCmpToGL(s_gameDepthFunc));
+}
 
 void Init() {
     if (s_initialized) return;
@@ -25,6 +101,11 @@ void Init() {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_LIGHTING);
+    glDisable(GL_CULL_FACE);
+
+    MakeIdentity(s_worldMatrix);
+    MakeIdentity(s_viewMatrix);
+    MakeIdentity(s_projMatrix);
 
     s_initialized = true;
     DbgPrint("GLRenderer initialized (compressed tex support: %s)",
@@ -36,8 +117,14 @@ void Shutdown() {
 }
 
 void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
+    s_windowW = windowW;
+    s_windowH = windowH;
+    s_gameW = gameW;
+    s_gameH = gameH;
+
     glViewport(0, 0, windowW, windowH);
 
+    s_in2DMode = true;
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     glOrtho(0.0, (double)gameW, (double)gameH, 0.0, -1.0, 1.0);
@@ -45,7 +132,6 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
-    glDisable(GL_DEPTH_TEST);
     glDisable(GL_LIGHTING);
     glEnable(GL_TEXTURE_2D);
 }
@@ -61,6 +147,7 @@ void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
         mask |= GL_COLOR_BUFFER_BIT;
     }
     if (flags & D3DCLEAR_ZBUFFER) {
+        glDepthMask(GL_TRUE);
         glClearDepth((double)z);
         mask |= GL_DEPTH_BUFFER_BIT;
     }
@@ -68,7 +155,10 @@ void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
         glClearStencil(stencil);
         mask |= GL_STENCIL_BUFFER_BIT;
     }
-    if (mask) glClear(mask);
+    if (mask) {
+        glDisable(GL_SCISSOR_TEST);
+        glClear(mask);
+    }
 }
 
 // --- Pixel format helpers ---
@@ -224,7 +314,68 @@ void SetAlphaRef(DWORD ref) {
 }
 
 void SetDepthEnabled(bool enabled) {
+    s_gameDepthEnabled = enabled;
     if (enabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+}
+
+void SetDepthWriteEnabled(bool enabled) {
+    s_gameDepthWriteEnabled = enabled;
+    glDepthMask(enabled ? GL_TRUE : GL_FALSE);
+}
+
+static GLenum D3DCmpToGL(DWORD d3dFunc) {
+    switch (d3dFunc) {
+        case D3DCMP_NEVER:        return GL_NEVER;
+        case D3DCMP_LESS:         return GL_LESS;
+        case D3DCMP_EQUAL:        return GL_EQUAL;
+        case D3DCMP_LESSEQUAL:    return GL_LEQUAL;
+        case D3DCMP_GREATER:      return GL_GREATER;
+        case D3DCMP_NOTEQUAL:     return GL_NOTEQUAL;
+        case D3DCMP_GREATEREQUAL: return GL_GEQUAL;
+        case D3DCMP_ALWAYS:       return GL_ALWAYS;
+        default: return GL_LEQUAL;
+    }
+}
+
+void SetDepthFunc(DWORD d3dFunc) {
+    s_gameDepthFunc = d3dFunc;
+    glDepthFunc(D3DCmpToGL(d3dFunc));
+}
+
+void SetWorldMatrix(const float* m) {
+    memcpy(s_worldMatrix, m, 16 * sizeof(float));
+    if (!s_in2DMode) {
+        glMatrixMode(GL_MODELVIEW);
+        glLoadMatrixf(s_viewMatrix);
+        glMultMatrixf(s_worldMatrix);
+    }
+}
+
+void SetViewMatrix(const float* m) {
+    memcpy(s_viewMatrix, m, 16 * sizeof(float));
+    if (!s_in2DMode) {
+        glMatrixMode(GL_MODELVIEW);
+        glLoadMatrixf(s_viewMatrix);
+        glMultMatrixf(s_worldMatrix);
+    }
+}
+
+void SetProjectionMatrix(const float* m) {
+    memcpy(s_projMatrix, m, 16 * sizeof(float));
+    if (!s_in2DMode) {
+        float proj[16];
+        memcpy(proj, s_projMatrix, sizeof(proj));
+        AdjustProjD3DToGL(proj);
+        glMatrixMode(GL_PROJECTION);
+        glLoadMatrixf(proj);
+    }
+}
+
+void SetViewport(DWORD x, DWORD y, DWORD w, DWORD h) {
+    s_vpX = x; s_vpY = y; s_vpW = w; s_vpH = h;
+    if (!s_in2DMode) {
+        ApplyViewport3D();
+    }
 }
 
 // --- FVF helpers ---
@@ -298,7 +449,7 @@ void DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices, DWORD
     if (!vertices || count == 0) return;
 
     bool isRHW = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
-    if (!isRHW) return;
+    if (isRHW) SetupFor2D(); else SetupFor3D();
 
     DWORD stride = CalcFVFStride(fvf);
     GLenum glType = D3DPrimToGL(type);
@@ -317,7 +468,7 @@ void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices
     if (!vertices || !indices || indexCount == 0) return;
 
     bool isRHW = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
-    if (!isRHW) return;
+    if (isRHW) SetupFor2D(); else SetupFor3D();
 
     DWORD stride = CalcFVFStride(fvf);
     GLenum glType = D3DPrimToGL(type);

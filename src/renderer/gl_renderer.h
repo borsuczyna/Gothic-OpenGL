@@ -37,6 +37,13 @@ void SetBlendFunc(DWORD srcBlend, DWORD dstBlend);
 void SetAlphaTestEnabled(bool enabled);
 void SetAlphaRef(DWORD ref);
 void SetDepthEnabled(bool enabled);
+void SetDepthWriteEnabled(bool enabled);
+void SetDepthFunc(DWORD d3dFunc);
+
+void SetWorldMatrix(const float* m);
+void SetViewMatrix(const float* m);
+void SetProjectionMatrix(const float* m);
+void SetViewport(DWORD x, DWORD y, DWORD w, DWORD h);
 
 void DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices, DWORD count);
 void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,

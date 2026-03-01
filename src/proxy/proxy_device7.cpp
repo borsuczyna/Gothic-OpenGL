@@ -15,7 +15,16 @@ void StubDirect3DDevice7::EnsureContext() {
     }
 }
 
+void StubDirect3DDevice7::InitIdentityMatrix(D3DMATRIX& m) {
+    memset(&m, 0, sizeof(D3DMATRIX));
+    m._11 = m._22 = m._33 = m._44 = 1.0f;
+}
+
 StubDirect3DDevice7::StubDirect3DDevice7() {
+    InitIdentityMatrix(worldMatrix);
+    InitIdentityMatrix(viewMatrix);
+    InitIdentityMatrix(projMatrix);
+    memset(&viewport, 0, sizeof(viewport));
     memset(&fakeDesc, 0, sizeof(fakeDesc));
 
     fakeDesc.dwDevCaps = D3DDEVCAPS_FLOATTLVERTEX | D3DDEVCAPS_EXECUTESYSTEMMEMORY |
@@ -84,6 +93,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EnumTextureFormats(LPD3DENUMPIXEL
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() {
     EnsureContext();
+    GOpenGL_ResetPresentFlag();
     if (contextAcquired) {
         int ww = GOpenGL_GetWindowWidth();
         int wh = GOpenGL_GetWindowHeight();
@@ -110,11 +120,53 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::Clear(DWORD count, LPD3DRECT rect
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetViewport(LPD3DVIEWPORT7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTransform(D3DTRANSFORMSTATETYPE type, LPD3DMATRIX m) {
+    if (!m) return S_OK;
+    switch (type) {
+    case D3DTRANSFORMSTATE_WORLD:
+        worldMatrix = *m;
+        if (contextAcquired) GLRenderer::SetWorldMatrix((const float*)&worldMatrix);
+        break;
+    case D3DTRANSFORMSTATE_VIEW:
+        viewMatrix = *m;
+        if (contextAcquired) GLRenderer::SetViewMatrix((const float*)&viewMatrix);
+        break;
+    case D3DTRANSFORMSTATE_PROJECTION:
+        projMatrix = *m;
+        if (contextAcquired) GLRenderer::SetProjectionMatrix((const float*)&projMatrix);
+        break;
+    default:
+        break;
+    }
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTransform(D3DTRANSFORMSTATETYPE type, LPD3DMATRIX m) {
+    if (!m) return S_OK;
+    switch (type) {
+    case D3DTRANSFORMSTATE_WORLD:      *m = worldMatrix; break;
+    case D3DTRANSFORMSTATE_VIEW:       *m = viewMatrix; break;
+    case D3DTRANSFORMSTATE_PROJECTION: *m = projMatrix; break;
+    default: break;
+    }
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetViewport(LPD3DVIEWPORT7 vp) {
+    if (!vp) return S_OK;
+    viewport = *vp;
+    if (contextAcquired) {
+        GLRenderer::SetViewport(viewport.dwX, viewport.dwY, viewport.dwWidth, viewport.dwHeight);
+    }
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::MultiplyTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetViewport(LPD3DVIEWPORT7) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetViewport(LPD3DVIEWPORT7 vp) {
+    if (vp) *vp = viewport;
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetMaterial(LPD3DMATERIAL7) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetMaterial(LPD3DMATERIAL7) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetLight(DWORD, LPD3DLIGHT7) { return S_OK; }
@@ -145,6 +197,14 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderState(D3DRENDERSTATETYPE
     case D3DRENDERSTATE_ZENABLE:
         zEnabled = (value != 0);
         if (contextAcquired) GLRenderer::SetDepthEnabled(zEnabled);
+        break;
+    case D3DRENDERSTATE_ZWRITEENABLE:
+        zWriteEnabled = (value != 0);
+        if (contextAcquired) GLRenderer::SetDepthWriteEnabled(zWriteEnabled);
+        break;
+    case D3DRENDERSTATE_ZFUNC:
+        zFunc = value;
+        if (contextAcquired) GLRenderer::SetDepthFunc(zFunc);
         break;
     default:
         break;

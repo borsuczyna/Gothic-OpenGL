@@ -5,6 +5,7 @@
 
 void GOpenGL_OnSetWindow(HWND hwnd);
 void GOpenGL_OnPresent();
+void GOpenGL_ResetPresentFlag();
 
 class StubDirectDrawSurface7 : public IDirectDrawSurface7 {
     int refCount = 1;

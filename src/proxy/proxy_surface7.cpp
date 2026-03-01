@@ -3,6 +3,12 @@
 #include "../renderer/gl_renderer.h"
 #include <cstring>
 
+static bool g_framePresentedByFlip = false;
+
+void GOpenGL_ResetPresentFlag() {
+    g_framePresentedByFlip = false;
+}
+
 void StubDirectDrawSurface7::EnsureSurfaceBuffer() {
     if (surfaceData.empty() && desc.dwWidth > 0 && desc.dwHeight > 0) {
         if (desc.ddpfPixelFormat.dwFlags & DDPF_FOURCC) {
@@ -135,7 +141,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddAttachedSurface(LPDIRECTDRA
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddOverlayDirtyRect(LPRECT) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Blt(LPRECT, LPDIRECTDRAWSURFACE7, LPRECT, DWORD, LPDDBLTFX) {
-    if (isPrimary) {
+    if (isPrimary && !g_framePresentedByFlip) {
         GOpenGL_OnPresent();
     }
     return S_OK;
@@ -164,6 +170,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::EnumOverlayZOrders(DWORD, LPVO
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Flip(LPDIRECTDRAWSURFACE7, DWORD) {
     GOpenGL_OnPresent();
+    g_framePresentedByFlip = true;
     return S_OK;
 }
 

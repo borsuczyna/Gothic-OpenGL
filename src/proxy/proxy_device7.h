@@ -17,8 +17,16 @@ class StubDirect3DDevice7 : public IDirect3DDevice7 {
     bool alphaTestEnabled = false;
     DWORD alphaRef = 0;
     bool zEnabled = true;
+    bool zWriteEnabled = true;
+    DWORD zFunc = D3DCMP_LESSEQUAL;
+
+    D3DMATRIX worldMatrix = {};
+    D3DMATRIX viewMatrix = {};
+    D3DMATRIX projMatrix = {};
+    D3DVIEWPORT7 viewport = {};
 
     void EnsureContext();
+    void InitIdentityMatrix(D3DMATRIX& m);
 
 public:
     StubDirect3DDevice7();
