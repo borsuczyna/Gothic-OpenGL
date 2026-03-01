@@ -3,9 +3,11 @@
 #include <ddraw.h>
 #include <vector>
 
-void GOpenGL_OnSetWindow(HWND hwnd);
-void GOpenGL_OnPresent();
-void GOpenGL_ResetPresentFlag();
+struct VkTexHandle;
+
+void GVulkan_OnSetWindow(HWND hwnd);
+void GVulkan_OnPresent();
+void GVulkan_ResetPresentFlag();
 
 class StubDirectDrawSurface7 : public IDirectDrawSurface7 {
     int refCount = 1;
@@ -14,7 +16,7 @@ class StubDirectDrawSurface7 : public IDirectDrawSurface7 {
     std::vector<unsigned char> surfaceData;
     const char* tag = "unknown";
 
-    unsigned int glTextureId = 0;
+    VkTexHandle* vkTexture = nullptr;
     bool textureDirty = false;
     bool hasData = false;
 
@@ -32,8 +34,8 @@ public:
     void InitAsFourCC(DWORD w, DWORD h, DWORD fourCC);
     void AttachBackBuffer(StubDirectDrawSurface7* bb);
 
-    void UploadTextureToGL();
-    unsigned int GetGLTextureId() const { return glTextureId; }
+    void UploadTextureToVk();
+    VkTexHandle* GetVkTexture() const { return vkTexture; }
     bool IsTextureDirty() const;
     const DDSURFACEDESC2& GetDescRef() const { return desc; }
     const std::vector<unsigned char>& GetSurfaceData() const { return surfaceData; }

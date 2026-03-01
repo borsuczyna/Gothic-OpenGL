@@ -1,16 +1,16 @@
 #include "proxy_device7.h"
 #include "proxy_surface7.h"
 #include "../debug.h"
-#include "../renderer/gl_renderer.h"
-#include "../renderer/gl_window.h"
+#include "../renderer/vk_renderer.h"
+#include "../renderer/vk_window.h"
 #include <cstring>
 
 void StubDirect3DDevice7::EnsureContext() {
     if (!contextAcquired) {
-        if (GOpenGL_AcquireContext()) {
-            GLRenderer::Init();
+        if (GVulkan_IsReady()) {
+            VkRenderer::Init();
             contextAcquired = true;
-            DbgPrint("Device7: GL context acquired on game thread");
+            DbgPrint("Device7: Vulkan renderer initialized on game thread");
         }
     }
 }
@@ -93,13 +93,13 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EnumTextureFormats(LPD3DENUMPIXEL
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() {
     EnsureContext();
-    GOpenGL_ResetPresentFlag();
+    GVulkan_ResetPresentFlag();
     if (contextAcquired) {
-        int ww = GOpenGL_GetWindowWidth();
-        int wh = GOpenGL_GetWindowHeight();
-        int gw = GOpenGL_GetGameWidth();
-        int gh = GOpenGL_GetGameHeight();
-        GLRenderer::BeginFrame(ww, wh, gw, gh);
+        int ww = GVulkan_GetWindowWidth();
+        int wh = GVulkan_GetWindowHeight();
+        int gw = GVulkan_GetGameWidth();
+        int gh = GVulkan_GetGameHeight();
+        VkRenderer::BeginFrame(ww, wh, gw, gh);
     }
     return S_OK;
 }
@@ -115,7 +115,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetRenderTarget(LPDIRECTDRAWSURFA
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::Clear(DWORD count, LPD3DRECT rects, DWORD flags, D3DCOLOR color, D3DVALUE z, DWORD stencil) {
     EnsureContext();
     if (contextAcquired) {
-        GLRenderer::Clear(flags, color, z, stencil);
+        VkRenderer::Clear(flags, color, z, stencil);
     }
     return S_OK;
 }
@@ -125,15 +125,15 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTransform(D3DTRANSFORMSTATETYP
     switch (type) {
     case D3DTRANSFORMSTATE_WORLD:
         worldMatrix = *m;
-        if (contextAcquired) GLRenderer::SetWorldMatrix((const float*)&worldMatrix);
+        if (contextAcquired) VkRenderer::SetWorldMatrix((const float*)&worldMatrix);
         break;
     case D3DTRANSFORMSTATE_VIEW:
         viewMatrix = *m;
-        if (contextAcquired) GLRenderer::SetViewMatrix((const float*)&viewMatrix);
+        if (contextAcquired) VkRenderer::SetViewMatrix((const float*)&viewMatrix);
         break;
     case D3DTRANSFORMSTATE_PROJECTION:
         projMatrix = *m;
-        if (contextAcquired) GLRenderer::SetProjectionMatrix((const float*)&projMatrix);
+        if (contextAcquired) VkRenderer::SetProjectionMatrix((const float*)&projMatrix);
         break;
     default:
         break;
@@ -156,7 +156,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetViewport(LPD3DVIEWPORT7 vp) {
     if (!vp) return S_OK;
     viewport = *vp;
     if (contextAcquired) {
-        GLRenderer::SetViewport(viewport.dwX, viewport.dwY, viewport.dwWidth, viewport.dwHeight);
+        VkRenderer::SetViewport(viewport.dwX, viewport.dwY, viewport.dwWidth, viewport.dwHeight);
     }
     return S_OK;
 }
@@ -176,35 +176,35 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderState(D3DRENDERSTATETYPE
     switch (state) {
     case D3DRENDERSTATE_ALPHABLENDENABLE:
         alphaBlendEnabled = (value != 0);
-        if (contextAcquired) GLRenderer::SetAlphaBlendEnabled(alphaBlendEnabled);
+        if (contextAcquired) VkRenderer::SetAlphaBlendEnabled(alphaBlendEnabled);
         break;
     case D3DRENDERSTATE_SRCBLEND:
         srcBlend = value;
-        if (contextAcquired) GLRenderer::SetBlendFunc(srcBlend, dstBlend);
+        if (contextAcquired) VkRenderer::SetBlendFunc(srcBlend, dstBlend);
         break;
     case D3DRENDERSTATE_DESTBLEND:
         dstBlend = value;
-        if (contextAcquired) GLRenderer::SetBlendFunc(srcBlend, dstBlend);
+        if (contextAcquired) VkRenderer::SetBlendFunc(srcBlend, dstBlend);
         break;
     case D3DRENDERSTATE_ALPHATESTENABLE:
         alphaTestEnabled = (value != 0);
-        if (contextAcquired) GLRenderer::SetAlphaTestEnabled(alphaTestEnabled);
+        if (contextAcquired) VkRenderer::SetAlphaTestEnabled(alphaTestEnabled);
         break;
     case D3DRENDERSTATE_ALPHAREF:
         alphaRef = value;
-        if (contextAcquired) GLRenderer::SetAlphaRef(alphaRef);
+        if (contextAcquired) VkRenderer::SetAlphaRef(alphaRef);
         break;
     case D3DRENDERSTATE_ZENABLE:
         zEnabled = (value != 0);
-        if (contextAcquired) GLRenderer::SetDepthEnabled(zEnabled);
+        if (contextAcquired) VkRenderer::SetDepthEnabled(zEnabled);
         break;
     case D3DRENDERSTATE_ZWRITEENABLE:
         zWriteEnabled = (value != 0);
-        if (contextAcquired) GLRenderer::SetDepthWriteEnabled(zWriteEnabled);
+        if (contextAcquired) VkRenderer::SetDepthWriteEnabled(zWriteEnabled);
         break;
     case D3DRENDERSTATE_ZFUNC:
         zFunc = value;
-        if (contextAcquired) GLRenderer::SetDepthFunc(zFunc);
+        if (contextAcquired) VkRenderer::SetDepthFunc(zFunc);
         break;
     default:
         break;
@@ -222,14 +222,14 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE ty
 
     if (boundTextures[0]) {
         if (boundTextures[0]->IsTextureDirty()) {
-            boundTextures[0]->UploadTextureToGL();
+            boundTextures[0]->UploadTextureToVk();
         }
-        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+        VkRenderer::BindTexture(boundTextures[0]->GetVkTexture());
     } else {
-        GLRenderer::BindTexture(0);
+        VkRenderer::BindTexture(nullptr);
     }
 
-    GLRenderer::DrawPrimitive(type, fvf, verts, count);
+    VkRenderer::DrawPrimitive(type, fvf, verts, count);
     return S_OK;
 }
 
@@ -238,14 +238,14 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVE
 
     if (boundTextures[0]) {
         if (boundTextures[0]->IsTextureDirty()) {
-            boundTextures[0]->UploadTextureToGL();
+            boundTextures[0]->UploadTextureToVk();
         }
-        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+        VkRenderer::BindTexture(boundTextures[0]->GetVkTexture());
     } else {
-        GLRenderer::BindTexture(0);
+        VkRenderer::BindTexture(nullptr);
     }
 
-    GLRenderer::DrawIndexedPrimitive(type, fvf, verts, vertCount, indices, idxCount);
+    VkRenderer::DrawIndexedPrimitive(type, fvf, verts, vertCount, indices, idxCount);
     return S_OK;
 }
 
@@ -265,7 +265,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE 
     vb->Lock(0, &data, nullptr);
     if (!data) return S_OK;
 
-    // Calculate stride to offset by startVertex
     DWORD stride = 0;
     switch (fvf & D3DFVF_POSITION_MASK) {
         case D3DFVF_XYZ:    stride = 12; break;
@@ -281,14 +280,14 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE 
 
     if (boundTextures[0]) {
         if (boundTextures[0]->IsTextureDirty()) {
-            boundTextures[0]->UploadTextureToGL();
+            boundTextures[0]->UploadTextureToVk();
         }
-        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+        VkRenderer::BindTexture(boundTextures[0]->GetVkTexture());
     } else {
-        GLRenderer::BindTexture(0);
+        VkRenderer::BindTexture(nullptr);
     }
 
-    GLRenderer::DrawPrimitive(type, fvf, verts, numVertices);
+    VkRenderer::DrawPrimitive(type, fvf, verts, numVertices);
 
     vb->Unlock();
     return S_OK;
@@ -320,14 +319,14 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITI
 
     if (boundTextures[0]) {
         if (boundTextures[0]->IsTextureDirty()) {
-            boundTextures[0]->UploadTextureToGL();
+            boundTextures[0]->UploadTextureToVk();
         }
-        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+        VkRenderer::BindTexture(boundTextures[0]->GetVkTexture());
     } else {
-        GLRenderer::BindTexture(0);
+        VkRenderer::BindTexture(nullptr);
     }
 
-    GLRenderer::DrawIndexedPrimitive(type, fvf, verts, numVertices, indices, idxCount);
+    VkRenderer::DrawIndexedPrimitive(type, fvf, verts, numVertices, indices, idxCount);
 
     vb->Unlock();
     return S_OK;
@@ -352,14 +351,14 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTextureStageState(DWORD stage,
     if (stage > 0 || !contextAcquired) return S_OK;
     switch (type) {
     case D3DTSS_ADDRESS:
-        GLRenderer::SetTextureAddressU(value);
-        GLRenderer::SetTextureAddressV(value);
+        VkRenderer::SetTextureAddressU(value);
+        VkRenderer::SetTextureAddressV(value);
         break;
     case D3DTSS_ADDRESSU:
-        GLRenderer::SetTextureAddressU(value);
+        VkRenderer::SetTextureAddressU(value);
         break;
     case D3DTSS_ADDRESSV:
-        GLRenderer::SetTextureAddressV(value);
+        VkRenderer::SetTextureAddressV(value);
         break;
     default:
         break;

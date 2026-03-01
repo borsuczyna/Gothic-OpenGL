@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <cstdio>
-#include "renderer/gl_window.h"
+#include "renderer/vk_window.h"
+#include "renderer/vk_renderer.h"
 #include "proxy/proxy_ddraw7.h"
 
 struct RealDDraw {
@@ -38,10 +39,10 @@ static void LoadRealDDraw() {
 
     real_ddraw.dll = LoadLibraryA(path);
     if (!real_ddraw.dll) {
-        printf("[GOpenGL] WARNING: Could not load real ddraw.dll from %s\n", path);
+        printf("[GVulkan] WARNING: Could not load real ddraw.dll from %s\n", path);
         return;
     }
-    printf("[GOpenGL] Loaded real ddraw.dll from %s\n", path);
+    printf("[GVulkan] Loaded real ddraw.dll from %s\n", path);
 
     real_ddraw.AcquireDDThreadLock         = GetProcAddress(real_ddraw.dll, "AcquireDDThreadLock");
     real_ddraw.CheckFullscreen             = GetProcAddress(real_ddraw.dll, "CheckFullscreen");
@@ -96,7 +97,7 @@ DEFINE_NAKED_FORWARDER(ReleaseDDThreadLock)
 
 extern "C" __attribute__((stdcall))
 HRESULT HookedDirectDrawCreateEx(GUID* lpGuid, void** lplpDD, REFIID iid, IUnknown* pUnkOuter) {
-    printf("[GOpenGL] HookedDirectDrawCreateEx called\n");
+    printf("[GVulkan] HookedDirectDrawCreateEx called\n");
 
     *lplpDD = new StubDirectDraw7();
     return S_OK;
@@ -109,12 +110,13 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID) {
         AllocConsole();
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);
-        printf("[GOpenGL] DLL loaded - ddraw.dll proxy active\n");
+        printf("[GVulkan] DLL loaded - ddraw.dll proxy active (Vulkan backend)\n");
 
         LoadRealDDraw();
     } else if (reason == DLL_PROCESS_DETACH) {
-        printf("[GOpenGL] DLL unloading\n");
-        GOpenGL_StopOpenGL();
+        printf("[GVulkan] DLL unloading\n");
+        VkRenderer::Shutdown();
+        GVulkan_Stop();
         if (real_ddraw.dll) {
             FreeLibrary(real_ddraw.dll);
             real_ddraw.dll = nullptr;

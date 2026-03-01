@@ -1,11 +1,11 @@
 #include "proxy_surface7.h"
 #include "../debug.h"
-#include "../renderer/gl_renderer.h"
+#include "../renderer/vk_renderer.h"
 #include <cstring>
 
 static bool g_framePresentedByFlip = false;
 
-void GOpenGL_ResetPresentFlag() {
+void GVulkan_ResetPresentFlag() {
     g_framePresentedByFlip = false;
 }
 
@@ -36,9 +36,9 @@ StubDirectDrawSurface7::StubDirectDrawSurface7(const char* surfaceTag) : tag(sur
 }
 
 StubDirectDrawSurface7::~StubDirectDrawSurface7() {
-    if (glTextureId) {
-        GLRenderer::FreeTexture(glTextureId);
-        glTextureId = 0;
+    if (vkTexture) {
+        VkRenderer::FreeTexture(vkTexture);
+        vkTexture = nullptr;
     }
 }
 
@@ -132,7 +132,7 @@ StubDirectDrawSurface7* StubDirectDrawSurface7::GetAttachedMip() const {
     return nullptr;
 }
 
-void StubDirectDrawSurface7::UploadTextureToGL() {
+void StubDirectDrawSurface7::UploadTextureToVk() {
     if (surfaceData.empty() || desc.dwWidth == 0 || desc.dwHeight == 0) return;
 
     bool anyDirty = textureDirty;
@@ -143,30 +143,30 @@ void StubDirectDrawSurface7::UploadTextureToGL() {
     }
     if (!anyDirty) return;
 
-    if (glTextureId == 0) {
-        glTextureId = GLRenderer::UploadTexture(
+    if (vkTexture == nullptr) {
+        vkTexture = VkRenderer::UploadTexture(
             desc.dwWidth, desc.dwHeight,
             surfaceData.data(), desc.lPitch,
             desc.ddpfPixelFormat);
-        if (glTextureId) {
+        if (vkTexture) {
             int uploadedLevels = 0;
             int level = 1;
             for (auto* mip = GetAttachedMip(); mip; mip = mip->GetAttachedMip(), level++) {
                 if (!mip->HasData()) break;
                 const auto& md = mip->GetDescRef();
                 const auto& sd = mip->GetSurfaceData();
-                GLRenderer::UploadTextureMipLevel(glTextureId, level,
+                VkRenderer::UploadTextureMipLevel(vkTexture, level,
                     md.dwWidth, md.dwHeight, sd.data(), md.lPitch, md.ddpfPixelFormat);
                 mip->textureDirty = false;
                 uploadedLevels = level;
             }
             if (uploadedLevels > 0) {
-                GLRenderer::SetTextureMipmapParams(glTextureId, uploadedLevels);
+                VkRenderer::SetTextureMipmapParams(vkTexture, uploadedLevels);
             }
         }
     } else {
         if (textureDirty) {
-            GLRenderer::UpdateTexture(glTextureId,
+            VkRenderer::UpdateTexture(vkTexture,
                 desc.dwWidth, desc.dwHeight,
                 surfaceData.data(), desc.lPitch,
                 desc.ddpfPixelFormat);
@@ -178,14 +178,14 @@ void StubDirectDrawSurface7::UploadTextureToGL() {
             if (mip->textureDirty) {
                 const auto& md = mip->GetDescRef();
                 const auto& sd = mip->GetSurfaceData();
-                GLRenderer::UploadTextureMipLevel(glTextureId, level,
+                VkRenderer::UploadTextureMipLevel(vkTexture, level,
                     md.dwWidth, md.dwHeight, sd.data(), md.lPitch, md.ddpfPixelFormat);
                 mip->textureDirty = false;
             }
             uploadedLevels = level;
         }
         if (uploadedLevels > 0) {
-            GLRenderer::SetTextureMipmapParams(glTextureId, uploadedLevels);
+            VkRenderer::SetTextureMipmapParams(vkTexture, uploadedLevels);
         }
     }
 
@@ -221,7 +221,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddOverlayDirtyRect(LPRECT) { 
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Blt(LPRECT, LPDIRECTDRAWSURFACE7, LPRECT, DWORD, LPDDBLTFX) {
     if (isPrimary && !g_framePresentedByFlip) {
-        GOpenGL_OnPresent();
+        VkRenderer::EndFrame();
     }
     return S_OK;
 }
@@ -248,7 +248,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::EnumAttachedSurfaces(LPVOID ct
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::EnumOverlayZOrders(DWORD, LPVOID, LPDDENUMSURFACESCALLBACK7) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Flip(LPDIRECTDRAWSURFACE7, DWORD) {
-    GOpenGL_OnPresent();
+    VkRenderer::EndFrame();
     g_framePresentedByFlip = true;
     return S_OK;
 }
@@ -323,7 +323,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetClipper(LPDIRECTDRAWCLIPPER
         clipper->GetHWnd(&hwnd);
         if (hwnd) {
             DbgPrint("  Surf[%s]::SetClipper -> got HWND 0x%p", tag, hwnd);
-            GOpenGL_OnSetWindow(hwnd);
+            GVulkan_OnSetWindow(hwnd);
         }
     }
     return S_OK;

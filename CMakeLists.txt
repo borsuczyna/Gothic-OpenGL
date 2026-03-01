@@ -1,13 +1,14 @@
 cmake_minimum_required(VERSION 3.15)
-project(GOpenGL LANGUAGES C CXX)
+project(GVulkan LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(ddraw SHARED
     src/dllmain.cpp
-    src/renderer/gl_renderer.cpp
-    src/renderer/gl_window.cpp
+    src/renderer/vk_window.cpp
+    src/renderer/vk_renderer.cpp
+    src/renderer/volk/volk.c
     src/proxy/proxy_surface7.cpp
     src/proxy/proxy_device7.cpp
     src/proxy/proxy_d3d7.cpp
@@ -17,8 +18,11 @@ add_library(ddraw SHARED
 
 target_include_directories(ddraw PRIVATE src)
 
+target_compile_definitions(ddraw PRIVATE
+    VK_USE_PLATFORM_WIN32_KHR
+)
+
 target_link_libraries(ddraw PRIVATE
-    opengl32
     gdi32
     user32
     dxguid

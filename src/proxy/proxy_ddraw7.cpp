@@ -3,7 +3,7 @@
 #include "proxy_surface7.h"
 #include "proxy_clipper.h"
 #include "../debug.h"
-#include "../renderer/gl_window.h"
+#include "../renderer/vk_window.h"
 #include <cstring>
 
 StubDirectDraw7::StubDirectDraw7() {
@@ -173,7 +173,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::RestoreDisplayMode() { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::SetCooperativeLevel(HWND hwnd, DWORD) {
     DbgPrint("DirectDraw7::SetCooperativeLevel hwnd=0x%p", hwnd);
     if (hwnd) {
-        GOpenGL_OnSetWindow(hwnd);
+        GVulkan_OnSetWindow(hwnd);
     }
     return S_OK;
 }
@@ -184,7 +184,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::SetDisplayMode(DWORD w, DWORD h, DWOR
     displayMode.dwHeight = h;
     displayMode.dwRefreshRate = refresh;
     displayMode.ddpfPixelFormat.dwRGBBitCount = bpp;
-    GOpenGL_SetGameResolution(w, h);
+    GVulkan_SetGameResolution(w, h);
     return S_OK;
 }
 
@@ -203,8 +203,8 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::TestCooperativeLevel() { return S_OK;
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::GetDeviceIdentifier(LPDDDEVICEIDENTIFIER2 id, DWORD) {
     if (id) {
         memset(id, 0, sizeof(DDDEVICEIDENTIFIER2));
-        strcpy(id->szDescription, "GOpenGL Renderer");
-        strcpy(id->szDriver, "GOpenGL");
+        strcpy(id->szDescription, "GVulkan Renderer");
+        strcpy(id->szDriver, "GVulkan");
         id->guidDeviceIdentifier = {0xF5049E78, 0x4861, 0x11D2, {0xA4, 0x07, 0x00, 0xA0, 0xC9, 0x06, 0x29, 0xA8}};
     }
     return S_OK;
