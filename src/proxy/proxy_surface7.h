@@ -19,6 +19,7 @@ class StubDirectDrawSurface7 : public IDirectDrawSurface7 {
     void EnsureSurfaceBuffer();
 
 public:
+    bool isPrimary = false;
     explicit StubDirectDrawSurface7(const char* surfaceTag = "surface");
     ~StubDirectDrawSurface7();
 

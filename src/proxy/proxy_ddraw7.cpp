@@ -62,6 +62,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateSurface(LPDDSURFACEDESC2 d, LPD
 
     if (caps & DDSCAPS_PRIMARYSURFACE) {
         auto* primary = new StubDirectDrawSurface7("primary");
+        primary->isPrimary = true;
         if (d) primary->SetDesc(d);
         primary->InitAsRGB(w, h, 32);
 

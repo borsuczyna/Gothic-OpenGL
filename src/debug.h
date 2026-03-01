@@ -14,11 +14,14 @@
 #endif
 
 inline void DbgPrint(const char* fmt, ...) {
+#ifdef GOPENGL_VERBOSE
     va_list args;
     va_start(args, fmt);
     printf("[GOpenGL] ");
     vprintf(fmt, args);
     printf("\n");
-    fflush(stdout);
     va_end(args);
+#else
+    (void)fmt;
+#endif
 }

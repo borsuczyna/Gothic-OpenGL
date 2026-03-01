@@ -89,14 +89,12 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() {
         int wh = GOpenGL_GetWindowHeight();
         int gw = GOpenGL_GetGameWidth();
         int gh = GOpenGL_GetGameHeight();
-        DbgPrint("Device7::BeginScene (window=%dx%d game=%dx%d)", ww, wh, gw, gh);
         GLRenderer::BeginFrame(ww, wh, gw, gh);
     }
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndScene() {
-    DbgPrint("Device7::EndScene");
     return S_OK;
 }
 
@@ -105,7 +103,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderTarget(LPDIRECTDRAWSURFA
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetRenderTarget(LPDIRECTDRAWSURFACE7* pp) { if (pp) *pp = nullptr; return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::Clear(DWORD count, LPD3DRECT rects, DWORD flags, D3DCOLOR color, D3DVALUE z, DWORD stencil) {
-    DbgPrint("Device7::Clear flags=0x%X color=0x%08X", flags, color);
     EnsureContext();
     if (contextAcquired) {
         GLRenderer::Clear(flags, color, z, stencil);
@@ -161,8 +158,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndStateBlock(LPDWORD h) { if (h)
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::PreLoad(LPDIRECTDRAWSURFACE7) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, LPVOID verts, DWORD count, DWORD) {
-    DbgPrint("Device7::DrawPrimitive type=%d fvf=0x%X count=%u ctx=%d tex0=%p",
-             type, fvf, count, contextAcquired, boundTextures[0]);
     if (!contextAcquired || !verts || count == 0) return S_OK;
 
     if (boundTextures[0]) {
@@ -288,8 +283,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTexture(DWORD stage, LPDIRECTD
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTexture(DWORD stage, LPDIRECTDRAWSURFACE7 tex) {
     if (stage >= 8) return S_OK;
     boundTextures[stage] = static_cast<StubDirectDrawSurface7*>(tex);
-    DbgPrint("Device7::SetTexture stage=%u surf=%p glTex=%u",
-             stage, tex, boundTextures[stage] ? boundTextures[stage]->GetGLTextureId() : 0);
     return S_OK;
 }
 

@@ -135,6 +135,9 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddAttachedSurface(LPDIRECTDRA
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddOverlayDirtyRect(LPRECT) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Blt(LPRECT, LPDIRECTDRAWSURFACE7, LPRECT, DWORD, LPDDBLTFX) {
+    if (isPrimary) {
+        GOpenGL_OnPresent();
+    }
     return S_OK;
 }
 

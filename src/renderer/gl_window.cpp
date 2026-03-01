@@ -26,11 +26,18 @@ static LRESULT CALLBACK GothicSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
     case WM_WINDOWPOSCHANGING: {
         WINDOWPOS* pos = (WINDOWPOS*)lp;
         pos->flags &= ~SWP_SHOWWINDOW;
+        pos->flags |= SWP_NOZORDER | SWP_NOACTIVATE;
         break;
     }
     case WM_STYLECHANGING:
     case WM_DISPLAYCHANGE:
         return 0;
+    case WM_ACTIVATE:
+    case WM_ACTIVATEAPP:
+    case WM_SETFOCUS:
+        return 0;
+    case WM_NCACTIVATE:
+        return CallWindowProcA(g_origGothicWndProc, hwnd, msg, FALSE, lp);
     }
     return CallWindowProcA(g_origGothicWndProc, hwnd, msg, wp, lp);
 }

@@ -106,9 +106,9 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hInst);
 
-        // AllocConsole();
-        // freopen("CONOUT$", "w", stdout);
-        // freopen("CONOUT$", "w", stderr);
+        AllocConsole();
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
         printf("[GOpenGL] DLL loaded - ddraw.dll proxy active\n");
 
         LoadRealDDraw();
