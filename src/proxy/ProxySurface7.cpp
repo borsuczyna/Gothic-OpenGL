@@ -197,7 +197,6 @@ void StubDirectDrawSurface7::UploadTextureToVk() {
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::QueryInterface(REFIID, void** ppv) {
-    DbgPrint("  Surf[%s]::QueryInterface", tag);
     *ppv = this; AddRef(); return S_OK;
 }
 
@@ -213,7 +212,6 @@ ULONG STDMETHODCALLTYPE StubDirectDrawSurface7::Release() {
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddAttachedSurface(LPDIRECTDRAWSURFACE7 s) {
-    DbgPrint("  Surf[%s]::AddAttachedSurface ptr=0x%p", tag, s);
     if (!attached) {
         attached = static_cast<StubDirectDrawSurface7*>(s);
         if (attached) attached->AddRef();
@@ -234,12 +232,10 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::BltBatch(LPDDBLTBATCH, DWORD, 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::BltFast(DWORD, DWORD, LPDIRECTDRAWSURFACE7, LPRECT, DWORD) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::DeleteAttachedSurface(DWORD, LPDIRECTDRAWSURFACE7) {
-    DbgPrint("  Surf[%s]::DeleteAttachedSurface", tag);
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::EnumAttachedSurfaces(LPVOID ctx, LPDDENUMSURFACESCALLBACK7 cb) {
-    DbgPrint("  Surf[%s]::EnumAttachedSurfaces", tag);
     if (attached && cb) {
         DDSURFACEDESC2 d = {};
         d.dwSize = sizeof(d);
@@ -258,7 +254,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Flip(LPDIRECTDRAWSURFACE7, DWO
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetAttachedSurface(LPDDSCAPS2 caps, LPDIRECTDRAWSURFACE7* s) {
-    DbgPrint("  Surf[%s]::GetAttachedSurface caps=0x%X", tag, caps ? caps->dwCaps : 0);
     if (attached) {
         attached->AddRef();
         *s = attached;
@@ -270,7 +265,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetAttachedSurface(LPDDSCAPS2 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetBltStatus(DWORD) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetCaps(LPDDSCAPS2 caps) {
-    DbgPrint("  Surf[%s]::GetCaps", tag);
     if (caps) *caps = desc.ddsCaps;
     return S_OK;
 }
@@ -283,19 +277,16 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetOverlayPosition(LPLONG, LPL
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetPalette(LPDIRECTDRAWPALETTE*) { return DDERR_NOPALETTEATTACHED; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetPixelFormat(LPDDPIXELFORMAT pf) {
-    DbgPrint("  Surf[%s]::GetPixelFormat", tag);
     if (pf) *pf = desc.ddpfPixelFormat;
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::GetSurfaceDesc(LPDDSURFACEDESC2 d) {
-    DbgPrint("  Surf[%s]::GetSurfaceDesc", tag);
     if (d) { *d = desc; d->dwSize = sizeof(DDSURFACEDESC2); }
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Initialize(LPDIRECTDRAW, LPDDSURFACEDESC2) {
-    DbgPrint("  Surf[%s]::Initialize", tag);
     return S_OK;
 }
 
@@ -326,7 +317,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetClipper(LPDIRECTDRAWCLIPPER
         HWND hwnd = nullptr;
         clipper->GetHWnd(&hwnd);
         if (hwnd) {
-            DbgPrint("  Surf[%s]::SetClipper -> got HWND 0x%p", tag, hwnd);
             GVulkan_OnSetWindow(hwnd);
         }
     }
@@ -351,7 +341,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::PageLock(DWORD) { return S_OK;
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::PageUnlock(DWORD) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetSurfaceDesc(LPDDSURFACEDESC2 d, DWORD) {
-    DbgPrint("  Surf[%s]::SetSurfaceDesc", tag);
     if (d) {
         void* gameSurface = d->lpSurface;
         desc = *d;

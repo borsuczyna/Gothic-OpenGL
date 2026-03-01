@@ -2,12 +2,10 @@
 #include "ProxyD3d7.h"
 #include "ProxySurface7.h"
 #include "ProxyClipper.h"
-#include "../Debug.h"
 #include "../renderer/VkWindow.h"
 #include <cstring>
 
 StubDirectDraw7::StubDirectDraw7() {
-    DbgPrint("StubDirectDraw7 created");
     memset(&displayMode, 0, sizeof(displayMode));
     displayMode.dwSize = sizeof(displayMode);
     displayMode.dwWidth = 800;
@@ -23,7 +21,6 @@ StubDirectDraw7::StubDirectDraw7() {
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::QueryInterface(REFIID riid, void** ppv) {
-    DbgPrint("DirectDraw7::QueryInterface");
     if (riid == IID_IDirect3D7) {
         *ppv = new StubDirect3D7();
         return S_OK;
@@ -39,7 +36,6 @@ ULONG STDMETHODCALLTYPE StubDirectDraw7::Release() { if (--refCount == 0) { dele
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::Compact() { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateClipper(DWORD, LPDIRECTDRAWCLIPPER* c, IUnknown*) {
-    DbgPrint("DirectDraw7::CreateClipper");
     *c = new StubDirectDrawClipper();
     return S_OK;
 }
@@ -48,14 +44,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreatePalette(DWORD, LPPALETTEENTRY, 
 
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateSurface(LPDDSURFACEDESC2 d, LPDIRECTDRAWSURFACE7* s, IUnknown*) {
     DWORD caps = d ? d->ddsCaps.dwCaps : 0;
-    DbgPrint("DirectDraw7::CreateSurface caps=0x%X size=%ux%u", caps, d ? d->dwWidth : 0, d ? d->dwHeight : 0);
-    if (d) {
-        DbgPrint("  desc flags=0x%X caps2=0x%X pfFlags=0x%X pfBitCount=%u pfZDepth=%u",
-            d->dwFlags, d->ddsCaps.dwCaps2,
-            d->ddpfPixelFormat.dwFlags,
-            d->ddpfPixelFormat.dwRGBBitCount,
-            d->ddpfPixelFormat.dwZBufferBitDepth);
-    }
 
     DWORD w = (d && d->dwWidth > 0)  ? d->dwWidth  : displayMode.dwWidth;
     DWORD h = (d && d->dwHeight > 0) ? d->dwHeight : displayMode.dwHeight;
@@ -71,23 +59,13 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateSurface(LPDDSURFACEDESC2 d, LPD
         primary->AttachBackBuffer(backBuf);
 
         *s = primary;
-        void** vtP = *(void***)primary;
-        DbgPrint("  -> Primary@0x%p vtable@0x%p BackBuffer@0x%p %ux%u@32bpp", primary, vtP, backBuf, w, h);
     } else if (caps & DDSCAPS_ZBUFFER) {
-        DbgPrint("  -> Creating zbuffer...");
         auto* zbuf = new StubDirectDrawSurface7("zbuffer");
-        DbgPrint("  -> zbuf allocated at 0x%p", zbuf);
         if (d) {
             zbuf->SetDesc(d);
-            DbgPrint("  -> SetDesc done");
             zbuf->InitAsZBuffer(w, h, d->ddpfPixelFormat);
-            DbgPrint("  -> InitAsZBuffer done");
         }
         *s = zbuf;
-        void** vtable = *(void***)zbuf;
-        DbgPrint("  -> ZBuffer@0x%p vtable@0x%p [0]=0x%p [1]=0x%p [2]=0x%p [3]=0x%p",
-            zbuf, vtable, vtable[0], vtable[1], vtable[2], vtable[3]);
-        DbgPrint("  -> ZBuffer %ux%u depth=%u DONE", w, h, d ? d->ddpfPixelFormat.dwZBufferBitDepth : 0);
     } else {
         DWORD tw = (d && d->dwWidth > 0)  ? d->dwWidth  : 256;
         DWORD th = (d && d->dwHeight > 0) ? d->dwHeight : 256;
@@ -120,12 +98,10 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateSurface(LPDDSURFACEDESC2 d, LPD
                 mw = mw > 1 ? mw / 2 : 1;
                 mh = mh > 1 ? mh / 2 : 1;
             }
-            DbgPrint("  -> Texture+MipChain %ux%u", tw, th);
         }
 
         *s = surf;
     }
-    DbgPrint("DirectDraw7::CreateSurface RETURNING S_OK");
     return S_OK;
 }
 
@@ -135,7 +111,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::DuplicateSurface(LPDIRECTDRAWSURFACE7
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::EnumDisplayModes(DWORD flags, LPDDSURFACEDESC2, LPVOID ctx, LPDDENUMMODESCALLBACK2 cb) {
-    DbgPrint("DirectDraw7::EnumDisplayModes");
     DDSURFACEDESC2 mode = {};
     mode.dwSize = sizeof(DDSURFACEDESC2);
     mode.dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
@@ -171,7 +146,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::Initialize(GUID*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::RestoreDisplayMode() { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::SetCooperativeLevel(HWND hwnd, DWORD) {
-    DbgPrint("DirectDraw7::SetCooperativeLevel hwnd=0x%p", hwnd);
     if (hwnd) {
         GVulkan_OnSetWindow(hwnd);
     }
@@ -179,7 +153,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::SetCooperativeLevel(HWND hwnd, DWORD)
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDraw7::SetDisplayMode(DWORD w, DWORD h, DWORD bpp, DWORD refresh, DWORD) {
-    DbgPrint("DirectDraw7::SetDisplayMode %ux%u@%ubpp", w, h, bpp);
     displayMode.dwWidth = w;
     displayMode.dwHeight = h;
     displayMode.dwRefreshRate = refresh;

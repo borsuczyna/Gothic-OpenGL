@@ -1,14 +1,12 @@
 #include "ProxyD3d7.h"
 #include "ProxyDevice7.h"
 #include "ProxyVertexBuffer7.h"
-#include "../Debug.h"
 
 HRESULT STDMETHODCALLTYPE StubDirect3D7::QueryInterface(REFIID, void** ppv) { *ppv = this; AddRef(); return S_OK; }
 ULONG   STDMETHODCALLTYPE StubDirect3D7::AddRef() { return ++refCount; }
 ULONG   STDMETHODCALLTYPE StubDirect3D7::Release() { if (--refCount == 0) { delete this; return 0; } return refCount; }
 
 HRESULT STDMETHODCALLTYPE StubDirect3D7::EnumDevices(LPD3DENUMDEVICESCALLBACK7 cb, LPVOID ctx) {
-    DbgPrint("Direct3D7::EnumDevices");
     D3DDEVICEDESC7 devDesc = {};
     devDesc.dwDevCaps = D3DDEVCAPS_HWRASTERIZATION | D3DDEVCAPS_HWTRANSFORMANDLIGHT |
         D3DDEVCAPS_DRAWPRIMTLVERTEX | D3DDEVCAPS_DRAWPRIMITIVES2 | D3DDEVCAPS_DRAWPRIMITIVES2EX;
@@ -38,19 +36,16 @@ HRESULT STDMETHODCALLTYPE StubDirect3D7::EnumDevices(LPD3DENUMDEVICESCALLBACK7 c
 }
 
 HRESULT STDMETHODCALLTYPE StubDirect3D7::CreateDevice(REFCLSID, LPDIRECTDRAWSURFACE7, LPDIRECT3DDEVICE7* dev) {
-    DbgPrint("Direct3D7::CreateDevice");
     *dev = new StubDirect3DDevice7();
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirect3D7::CreateVertexBuffer(LPD3DVERTEXBUFFERDESC d, LPDIRECT3DVERTEXBUFFER7* vb, DWORD) {
-    DbgPrint("Direct3D7::CreateVertexBuffer");
     *vb = new StubDirect3DVertexBuffer7(*d);
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirect3D7::EnumZBufferFormats(REFCLSID, LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID ctx) {
-    DbgPrint("Direct3D7::EnumZBufferFormats");
     DDPIXELFORMAT fmts[] = {
         {sizeof(DDPIXELFORMAT), DDPF_ZBUFFER, 0, 16, 0, 0xFFFF, 0, 0},
         {sizeof(DDPIXELFORMAT), DDPF_ZBUFFER, 0, 24, 0, 0xFFFFFF, 0, 0},

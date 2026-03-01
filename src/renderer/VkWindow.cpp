@@ -2,7 +2,7 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #define VMA_IMPLEMENTATION
 #include "VkWindow.h"
-#include "../Debug.h"
+#include "ImGuiManager.h"
 #include <cstdio>
 #include <vector>
 #include <algorithm>
@@ -33,7 +33,7 @@ static VmaAllocator     g_allocator      = VK_NULL_HANDLE;
 
 static VkSwapchainKHR   g_swapchain      = VK_NULL_HANDLE;
 static VkFormat          g_swapFormat     = VK_FORMAT_B8G8R8A8_UNORM;
-static VkExtent2D        g_swapExtent     = {800, 600};
+static VkExtent2D        g_swapExtent     = {1280, 720};
 static std::vector<VkImage>     g_swapImages;
 static std::vector<VkImageView> g_swapImageViews;
 
@@ -106,6 +106,16 @@ static void EnableVisualStyles() {
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_KEYDOWN && wp == VK_F11) {
+        ImGuiManager::ToggleMenu();
+        return 0;
+    }
+
+    if (ImGuiManager::HandleWndProc(hwnd, msg, wp, lp))
+        return TRUE;
+
+    bool menuOpen = ImGuiManager::IsMenuVisible();
+
     switch (msg) {
     case WM_CLOSE:
         g_running = false;
@@ -116,17 +126,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         g_swapchainDirty = true;
         return 0;
+    case WM_SETCURSOR:
+        if (menuOpen) {
+            SetCursor(LoadCursor(nullptr, IDC_ARROW));
+            return TRUE;
+        }
+        break;
     case WM_KEYDOWN:
     case WM_KEYUP:
     case WM_CHAR:
-        if (g_gothicHwnd) PostMessageA(g_gothicHwnd, msg, wp, lp);
+        if (!menuOpen && g_gothicHwnd)
+            PostMessageA(g_gothicHwnd, msg, wp, lp);
         return 0;
     case WM_MOUSEMOVE:
     case WM_LBUTTONDOWN: case WM_LBUTTONUP:
     case WM_RBUTTONDOWN: case WM_RBUTTONUP:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP:
     case WM_MOUSEWHEEL:
-        if (g_gothicHwnd) PostMessageA(g_gothicHwnd, msg, wp, lp);
+        if (!menuOpen && g_gothicHwnd)
+            PostMessageA(g_gothicHwnd, msg, wp, lp);
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
@@ -575,7 +593,7 @@ static DWORD WINAPI VkThreadProc(LPVOID) {
     wc.lpszClassName  = WND_CLASS;
     RegisterClassExA(&wc);
 
-    RECT r = {0, 0, 800, 600};
+    RECT r = {0, 0, 1280, 720};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
 
     g_hwnd = CreateWindowExA(
@@ -788,6 +806,7 @@ int GVulkan_GetWindowHeight() {
 int  GVulkan_GetGameWidth()    { return g_gameWidth; }
 int  GVulkan_GetGameHeight()   { return g_gameHeight; }
 
+VkInstance       GVulkan_GetInstance()       { return g_instance; }
 VkDevice         GVulkan_GetDevice()         { return g_device; }
 VkPhysicalDevice GVulkan_GetPhysicalDevice() { return g_physicalDevice; }
 VkRenderPass     GVulkan_GetRenderPass()     { return g_renderPass; }

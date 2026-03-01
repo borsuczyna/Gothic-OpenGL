@@ -1,8 +1,8 @@
 #include "VkRenderer.h"
+#include "ImGuiManager.h"
 #include "Types.h"
 #include "Pipeline.h"
 #include "TextureUtils.h"
-#include "../Debug.h"
 #include "../shaders/GothicShaders.h"
 #include <vector>
 #include <cstring>
@@ -557,6 +557,8 @@ void Init() {
     MakeIdentity(s_projMatrix);
 
     s_initialized = true;
+
+    ImGuiManager::Init();
 }
 
 void Shutdown() {
@@ -565,6 +567,8 @@ void Shutdown() {
     if (!device) return;
 
     vkDeviceWaitIdle(device);
+
+    ImGuiManager::Shutdown();
 
     if (s_whiteTex.view)    vkDestroyImageView(device, s_whiteTex.view, nullptr);
     if (s_whiteTex.sampler) vkDestroySampler(device, s_whiteTex.sampler, nullptr);
@@ -594,6 +598,8 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     if (s_frameActive) {
         EndFrame();
     }
+
+    ImGuiManager::PollInput();
 
     s_windowW = windowW;
     s_windowH = windowH;
@@ -628,10 +634,15 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     VkRect2D scissor = {};
     scissor.extent = ext;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    ImGuiManager::NewFrame();
 }
 
 void EndFrame() {
     if (!s_frameActive) return;
+
+    ImGuiManager::Render(s_cmdBufs[s_frameIndex]);
+
     s_frameActive = false;
     GVulkan_EndFrame(s_cmdBufs[s_frameIndex]);
     s_frameIndex = (s_frameIndex + 1) % MAX_FRAMES;

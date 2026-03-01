@@ -19,6 +19,7 @@ int  GVulkan_GetWindowHeight();
 int  GVulkan_GetGameWidth();
 int  GVulkan_GetGameHeight();
 
+VkInstance        GVulkan_GetInstance();
 VkDevice          GVulkan_GetDevice();
 VkPhysicalDevice  GVulkan_GetPhysicalDevice();
 VkRenderPass      GVulkan_GetRenderPass();

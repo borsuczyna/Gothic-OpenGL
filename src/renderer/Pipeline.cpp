@@ -1,5 +1,4 @@
 #include "Pipeline.h"
-#include "../Debug.h"
 #include <cstring>
 #include <d3d.h>
 
@@ -143,10 +142,8 @@ VkPipeline PipelineCache::getOrCreate(const PipelineKey& key,
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pci, nullptr, &pipeline);
-    if (result != VK_SUCCESS) {
-        DbgPrint("ERROR: vkCreateGraphicsPipelines failed (%d)", result);
+    if (result != VK_SUCCESS)
         return VK_NULL_HANDLE;
-    }
 
     cache_[key] = pipeline;
     return pipeline;

@@ -31,7 +31,6 @@ void StubDirect3DDevice7::EnsureContext() {
         if (GVulkan_IsReady()) {
             VkRenderer::Init();
             contextAcquired = true;
-            DbgPrint("Device7: Vulkan renderer initialized on game thread");
         }
     }
 }
@@ -90,14 +89,13 @@ StubDirect3DDevice7::StubDirect3DDevice7() {
     fakeDesc.dwTextureOpCaps   = 0x3FFFFFF;
 }
 
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::QueryInterface(REFIID, void** ppv) { DbgPrint("Device7::QI"); *ppv = this; AddRef(); return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::QueryInterface(REFIID, void** ppv) { *ppv = this; AddRef(); return S_OK; }
 ULONG   STDMETHODCALLTYPE StubDirect3DDevice7::AddRef() { return ++refCount; }
 ULONG   STDMETHODCALLTYPE StubDirect3DDevice7::Release() { if (--refCount == 0) { delete this; return 0; } return refCount; }
 
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetCaps(LPD3DDEVICEDESC7 d) { DbgPrint("Device7::GetCaps"); if (d) *d = fakeDesc; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetCaps(LPD3DDEVICEDESC7 d) { if (d) *d = fakeDesc; return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID ctx) {
-    DbgPrint("Device7::EnumTextureFormats");
     DDPIXELFORMAT fmts[] = {
         {sizeof(DDPIXELFORMAT), DDPF_RGB, 0, 16, 0xF800, 0x7E0, 0x1F, 0x00},
         {sizeof(DDPIXELFORMAT), DDPF_RGB | DDPF_ALPHAPIXELS, 0, 16, 0x7C00, 0x3E0, 0x1F, 0x8000},

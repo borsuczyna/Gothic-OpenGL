@@ -1,5 +1,4 @@
 #include "TextureUtils.h"
-#include "../Debug.h"
 #include <cstring>
 
 namespace gvlk {
