@@ -321,8 +321,15 @@ static void EndSingleTimeCommands(VkCommandBuffer cmd) {
     vkFreeCommandBuffers(GVulkan_GetDevice(), s_cmdPool, 1, &cmd);
 }
 
+static uint32_t CalcMipLevels(uint32_t w, uint32_t h) {
+    uint32_t levels = 1;
+    uint32_t dim = w > h ? w : h;
+    while (dim > 1) { dim >>= 1; levels++; }
+    return levels;
+}
+
 static void TransitionImageLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout,
-                                  VkImageLayout newLayout, uint32_t mipLevels) {
+                                  VkImageLayout newLayout, uint32_t baseMip, uint32_t mipCount) {
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = oldLayout;
@@ -331,17 +338,35 @@ static void TransitionImageLayout(VkCommandBuffer cmd, VkImage image, VkImageLay
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = mipLevels;
+    barrier.subresourceRange.baseMipLevel = baseMip;
+    barrier.subresourceRange.levelCount = mipCount;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
     VkPipelineStageFlags srcStage, dstStage;
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+               newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+               newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        srcStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
+               newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     } else {
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -411,13 +436,14 @@ static DWORD FourCCBlockSize(DWORD fourCC) {
     return 16;
 }
 
-static void UploadImageData(VkImage image, DWORD w, DWORD h, int mipLevel,
+static void UploadImageData(VkImage image, DWORD w, DWORD h, uint32_t mipLevel,
                             const void* data, DWORD dataSize) {
     if (dataSize > STAGING_BUFFER_SIZE) return;
     memcpy(s_stagingMapped, data, dataSize);
 
     VkCommandBuffer cmd = BeginSingleTimeCommands();
-    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevel, 1);
 
     VkBufferImageCopy region = {};
     region.bufferOffset = 0;
@@ -429,13 +455,55 @@ static void UploadImageData(VkImage image, DWORD w, DWORD h, int mipLevel,
     vkCmdCopyBufferToImage(cmd, s_stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mipLevel, 1);
     EndSingleTimeCommands(cmd);
 }
 
-static void TransitionFullImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels) {
+static void GenerateMipmaps(VkImage image, uint32_t w, uint32_t h,
+                            uint32_t mipLevels, uint32_t fromLevel) {
+    if (fromLevel + 1 >= mipLevels) return;
+
     VkCommandBuffer cmd = BeginSingleTimeCommands();
-    TransitionImageLayout(cmd, image, oldLayout, newLayout, mipLevels);
+
+    int32_t mipW = (int32_t)(w >> fromLevel);
+    int32_t mipH = (int32_t)(h >> fromLevel);
+    if (mipW < 1) mipW = 1;
+    if (mipH < 1) mipH = 1;
+
+    for (uint32_t i = fromLevel; i < mipLevels - 1; i++) {
+        TransitionImageLayout(cmd, image,
+            (i == fromLevel) ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, i, 1);
+
+        TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, i + 1, 1);
+
+        int32_t nextW = mipW > 1 ? mipW / 2 : 1;
+        int32_t nextH = mipH > 1 ? mipH / 2 : 1;
+
+        VkImageBlit blit = {};
+        blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1 };
+        blit.srcOffsets[0] = { 0, 0, 0 };
+        blit.srcOffsets[1] = { mipW, mipH, 1 };
+        blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, i + 1, 0, 1 };
+        blit.dstOffsets[0] = { 0, 0, 0 };
+        blit.dstOffsets[1] = { nextW, nextH, 1 };
+
+        vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &blit, VK_FILTER_LINEAR);
+
+        TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, i, 1);
+
+        mipW = nextW;
+        mipH = nextH;
+    }
+
+    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mipLevels - 1, 1);
+
     EndSingleTimeCommands(cmd);
 }
 
@@ -449,7 +517,12 @@ static VkSampler CreateSampler(uint32_t mipLevels) {
     sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sci.maxLod = (float)mipLevels;
-    sci.maxAnisotropy = 1.0f;
+    if (mipLevels > 1) {
+        sci.anisotropyEnable = VK_TRUE;
+        sci.maxAnisotropy = 16.0f;
+    } else {
+        sci.maxAnisotropy = 1.0f;
+    }
     VkSampler sampler;
     vkCreateSampler(GVulkan_GetDevice(), &sci, nullptr, &sampler);
     return sampler;
@@ -730,29 +803,39 @@ void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
     }
 }
 
-VkTexHandle* UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt) {
+VkTexHandle* UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt, int totalMipLevels) {
     if (!data || w == 0 || h == 0) return nullptr;
 
     VkDevice device = GVulkan_GetDevice();
     auto* tex = new VkTexHandle();
     tex->width = w;
     tex->height = h;
-    tex->mipLevels = 1;
 
     bool compressed = (fmt.dwFlags & DDPF_FOURCC) != 0;
     VkFormat vkFmt = compressed ? FourCCToVkFormat(fmt.dwFourCC) : VK_FORMAT_R8G8B8A8_UNORM;
     if (vkFmt == VK_FORMAT_UNDEFINED) { delete tex; return nullptr; }
+    tex->format = vkFmt;
+
+    uint32_t mips = (uint32_t)totalMipLevels;
+    if (mips <= 1) mips = 1;
+    uint32_t maxPossible = CalcMipLevels(w, h);
+    if (mips > maxPossible) mips = maxPossible;
+    if (compressed && (w < 4 || h < 4)) mips = 1;
+    tex->mipLevels = mips;
+
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (mips > 1) usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     VkImageCreateInfo ici = {};
     ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = vkFmt;
     ici.extent = {w, h, 1};
-    ici.mipLevels = 1;
+    ici.mipLevels = mips;
     ici.arrayLayers = 1;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.usage = usage;
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -777,10 +860,10 @@ VkTexHandle* UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, cons
     vci.image = tex->image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = vkFmt;
-    vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1 };
     vkCreateImageView(device, &vci, nullptr, &tex->view);
 
-    tex->sampler = CreateSampler(1);
+    tex->sampler = CreateSampler(mips);
     tex->descSet = AllocateDescriptorSet();
     UpdateDescriptorSet(tex->descSet, tex->view, tex->sampler);
 
@@ -796,14 +879,10 @@ void UpdateTexture(VkTexHandle* tex, DWORD w, DWORD h, const void* data, DWORD p
         DWORD bw = (w + 3) / 4;
         DWORD bh = (h + 3) / 4;
         DWORD dataSize = bw * bh * blockSize;
-        TransitionFullImage(tex->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, tex->mipLevels);
         UploadImageData(tex->image, w, h, 0, data, dataSize);
     } else {
         std::vector<unsigned char> rgba;
         ConvertToRGBA(data, rgba, w, h, pitch, fmt);
-        TransitionFullImage(tex->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, tex->mipLevels);
         UploadImageData(tex->image, w, h, 0, rgba.data(), (DWORD)rgba.size());
     }
 }
@@ -811,17 +890,33 @@ void UpdateTexture(VkTexHandle* tex, DWORD w, DWORD h, const void* data, DWORD p
 void UploadTextureMipLevel(VkTexHandle* tex, int level, DWORD w, DWORD h,
                            const void* data, DWORD pitch, const DDPIXELFORMAT& fmt) {
     if (!tex || !data || w == 0 || h == 0) return;
-    // For mip levels, we need to recreate the image with more mip levels
-    // For now, the image was created with 1 mip level, so additional mips are ignored
-    // This is handled in SetTextureMipmapParams where we recreate
-    (void)level; (void)w; (void)h; (void)data; (void)pitch; (void)fmt;
+    if ((uint32_t)level >= tex->mipLevels) return;
+
+    bool compressed = (fmt.dwFlags & DDPF_FOURCC) != 0;
+    if (compressed) {
+        DWORD blockSize = FourCCBlockSize(fmt.dwFourCC);
+        DWORD bw = (w + 3) / 4;
+        DWORD bh = (h + 3) / 4;
+        DWORD dataSize = bw * bh * blockSize;
+        UploadImageData(tex->image, w, h, (uint32_t)level, data, dataSize);
+    } else {
+        std::vector<unsigned char> rgba;
+        ConvertToRGBA(data, rgba, w, h, pitch, fmt);
+        UploadImageData(tex->image, w, h, (uint32_t)level, rgba.data(), (DWORD)rgba.size());
+    }
 }
 
 void SetTextureMipmapParams(VkTexHandle* tex, int mipCount) {
     if (!tex || mipCount <= 0) return;
-    // Mipmap handling requires recreating the image with proper mip levels.
-    // For initial implementation, we accept linear filtering on base level only.
-    (void)mipCount;
+
+    uint32_t providedLevels = (uint32_t)mipCount + 1;
+    bool isCompressed = (tex->format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ||
+                         tex->format == VK_FORMAT_BC2_UNORM_BLOCK ||
+                         tex->format == VK_FORMAT_BC3_UNORM_BLOCK);
+
+    if (!isCompressed && providedLevels < tex->mipLevels) {
+        GenerateMipmaps(tex->image, tex->width, tex->height, tex->mipLevels, providedLevels - 1);
+    }
 }
 
 void FreeTexture(VkTexHandle* tex) {

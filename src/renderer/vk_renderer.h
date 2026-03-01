@@ -14,6 +14,7 @@ struct VkTexHandle {
     uint32_t      width    = 0;
     uint32_t      height   = 0;
     uint32_t      mipLevels = 1;
+    VkFormat      format   = VK_FORMAT_R8G8B8A8_UNORM;
 };
 
 namespace VkRenderer {
@@ -25,7 +26,7 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH);
 void EndFrame();
 void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil);
 
-VkTexHandle* UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt);
+VkTexHandle* UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt, int totalMipLevels = 1);
 void   UpdateTexture(VkTexHandle* tex, DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt);
 void   UploadTextureMipLevel(VkTexHandle* tex, int level, DWORD w, DWORD h, const void* data, DWORD pitch, const DDPIXELFORMAT& fmt);
 void   SetTextureMipmapParams(VkTexHandle* tex, int mipCount);

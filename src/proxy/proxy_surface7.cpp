@@ -144,10 +144,14 @@ void StubDirectDrawSurface7::UploadTextureToVk() {
     if (!anyDirty) return;
 
     if (vkTexture == nullptr) {
+        int mipSurfaceCount = 0;
+        for (auto* m = GetAttachedMip(); m; m = m->GetAttachedMip())
+            if (m->HasData()) mipSurfaceCount++;
+
         vkTexture = VkRenderer::UploadTexture(
             desc.dwWidth, desc.dwHeight,
             surfaceData.data(), desc.lPitch,
-            desc.ddpfPixelFormat);
+            desc.ddpfPixelFormat, mipSurfaceCount + 1);
         if (vkTexture) {
             int uploadedLevels = 0;
             int level = 1;
