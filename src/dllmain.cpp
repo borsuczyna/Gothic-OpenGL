@@ -1,7 +1,7 @@
 #include <windows.h>
 #include <cstdio>
-#include "opengl_window.h"
-#include "stub_ddraw.h"
+#include "renderer/gl_window.h"
+#include "proxy/proxy_ddraw7.h"
 
 struct RealDDraw {
     HMODULE dll;
@@ -38,10 +38,10 @@ static void LoadRealDDraw() {
 
     real_ddraw.dll = LoadLibraryA(path);
     if (!real_ddraw.dll) {
-        printf("[GVLK] WARNING: Could not load real ddraw.dll from %s\n", path);
+        printf("[GOpenGL] WARNING: Could not load real ddraw.dll from %s\n", path);
         return;
     }
-    printf("[GVLK] Loaded real ddraw.dll from %s\n", path);
+    printf("[GOpenGL] Loaded real ddraw.dll from %s\n", path);
 
     real_ddraw.AcquireDDThreadLock         = GetProcAddress(real_ddraw.dll, "AcquireDDThreadLock");
     real_ddraw.CheckFullscreen             = GetProcAddress(real_ddraw.dll, "CheckFullscreen");
@@ -66,9 +66,6 @@ static void LoadRealDDraw() {
     real_ddraw.RegisterSpecialCase         = GetProcAddress(real_ddraw.dll, "RegisterSpecialCase");
     real_ddraw.ReleaseDDThreadLock         = GetProcAddress(real_ddraw.dll, "ReleaseDDThreadLock");
 }
-
-// Naked forwarding wrappers for functions the game may call but we don't intercept.
-// These jump directly to the real ddraw without touching the stack.
 
 #define DEFINE_NAKED_FORWARDER(name) \
     extern "C" __attribute__((naked)) void Fake##name() { \
@@ -97,12 +94,9 @@ DEFINE_NAKED_FORWARDER(GetSurfaceFromDC)
 DEFINE_NAKED_FORWARDER(RegisterSpecialCase)
 DEFINE_NAKED_FORWARDER(ReleaseDDThreadLock)
 
-// Hooked DirectDrawCreateEx -- returns our stub IDirectDraw7 instead of the real one.
-// This prevents the game from initializing real DirectDraw rendering.
-
 extern "C" __attribute__((stdcall))
 HRESULT HookedDirectDrawCreateEx(GUID* lpGuid, void** lplpDD, REFIID iid, IUnknown* pUnkOuter) {
-    printf("[GVLK] HookedDirectDrawCreateEx called\n");
+    printf("[GOpenGL] HookedDirectDrawCreateEx called\n");
 
     *lplpDD = new StubDirectDraw7();
     return S_OK;
@@ -115,12 +109,12 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID) {
         AllocConsole();
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);
-        printf("[GVLK] DLL loaded - ddraw.dll proxy active\n");
+        printf("[GOpenGL] DLL loaded - ddraw.dll proxy active\n");
 
         LoadRealDDraw();
     } else if (reason == DLL_PROCESS_DETACH) {
-        printf("[GVLK] DLL unloading\n");
-        GVLK_StopOpenGL();
+        printf("[GOpenGL] DLL unloading\n");
+        GOpenGL_StopOpenGL();
         if (real_ddraw.dll) {
             FreeLibrary(real_ddraw.dll);
             real_ddraw.dll = nullptr;

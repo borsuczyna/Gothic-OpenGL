@@ -1,4 +1,4 @@
-#include "opengl_window.h"
+#include "gl_window.h"
 #include <GL/gl.h>
 #include <cstdio>
 
@@ -11,7 +11,7 @@ static bool g_windowCreated = false;
 static volatile bool g_running = false;
 static HANDLE g_thread = nullptr;
 
-static const char* WND_CLASS = "GVLK_GL";
+static const char* WND_CLASS = "GOpenGL_WND";
 
 static void EnableVisualStyles() {
     static const char manifest[] =
@@ -26,7 +26,7 @@ static void EnableVisualStyles() {
 
     char tmpPath[MAX_PATH], tmpFile[MAX_PATH];
     GetTempPathA(MAX_PATH, tmpPath);
-    GetTempFileNameA(tmpPath, "gvlk", 0, tmpFile);
+    GetTempFileNameA(tmpPath, "gogl", 0, tmpFile);
 
     HANDLE hFile = CreateFileA(tmpFile, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
     if (hFile != INVALID_HANDLE_VALUE) {
@@ -77,14 +77,14 @@ static DWORD WINAPI GLThreadProc(LPVOID) {
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
 
     g_hwnd = CreateWindowExA(
-        0, WND_CLASS, "GVLK - Gothic OpenGL",
+        0, WND_CLASS, "GOpenGL - Gothic OpenGL",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         r.right - r.left, r.bottom - r.top,
         nullptr, nullptr, hInst, nullptr);
 
     if (!g_hwnd) {
-        printf("[GVLK] ERROR: Failed to create GL window\n");
+        printf("[GOpenGL] ERROR: Failed to create GL window\n");
         fflush(stdout);
         return 1;
     }
@@ -106,7 +106,7 @@ static DWORD WINAPI GLThreadProc(LPVOID) {
     g_hglrc = wglCreateContext(g_hdc);
     wglMakeCurrent(g_hdc, g_hglrc);
 
-    printf("[GVLK] OpenGL window created: %s\n", (const char*)glGetString(GL_RENDERER));
+    printf("[GOpenGL] OpenGL window created: %s\n", (const char*)glGetString(GL_RENDERER));
     fflush(stdout);
 
     g_running = true;
@@ -173,13 +173,13 @@ static DWORD WINAPI GLThreadProc(LPVOID) {
     return 0;
 }
 
-void GVLK_OnSetWindow(HWND hwnd) {
+void GOpenGL_OnSetWindow(HWND hwnd) {
     if (g_initialized || !hwnd)
         return;
     g_initialized = true;
     g_gothicHwnd = hwnd;
 
-    printf("[GVLK] Captured Gothic HWND=0x%p, hiding it\n", hwnd);
+    printf("[GOpenGL] Captured Gothic HWND=0x%p, hiding it\n", hwnd);
     fflush(stdout);
 
     ShowWindow(hwnd, SW_HIDE);
@@ -187,7 +187,7 @@ void GVLK_OnSetWindow(HWND hwnd) {
     g_thread = CreateThread(nullptr, 0, GLThreadProc, nullptr, 0, nullptr);
 }
 
-void GVLK_OnPresent() {
+void GOpenGL_OnPresent() {
     if (!g_initialized) return;
 
     if (g_gothicHwnd && IsWindowVisible(g_gothicHwnd)) {
@@ -201,7 +201,7 @@ void GVLK_OnPresent() {
     }
 }
 
-void GVLK_StopOpenGL() {
+void GOpenGL_StopOpenGL() {
     if (g_running) {
         g_running = false;
         if (g_thread) {

@@ -1,0 +1,115 @@
+#include "proxy_device7.h"
+#include "../debug.h"
+#include <cstring>
+
+StubDirect3DDevice7::StubDirect3DDevice7() {
+    memset(&fakeDesc, 0, sizeof(fakeDesc));
+
+    fakeDesc.dwDevCaps = D3DDEVCAPS_FLOATTLVERTEX | D3DDEVCAPS_EXECUTESYSTEMMEMORY |
+        D3DDEVCAPS_TLVERTEXSYSTEMMEMORY | D3DDEVCAPS_TEXTUREVIDEOMEMORY |
+        D3DDEVCAPS_DRAWPRIMTLVERTEX | D3DDEVCAPS_CANRENDERAFTERFLIP |
+        D3DDEVCAPS_DRAWPRIMITIVES2 | D3DDEVCAPS_DRAWPRIMITIVES2EX |
+        D3DDEVCAPS_HWTRANSFORMANDLIGHT | D3DDEVCAPS_HWRASTERIZATION;
+
+    fakeDesc.dpcTriCaps.dwSize = sizeof(D3DPRIMCAPS);
+    fakeDesc.dpcTriCaps.dwMiscCaps    = D3DPMISCCAPS_MASKZ | D3DPMISCCAPS_CULLNONE | D3DPMISCCAPS_CULLCW | D3DPMISCCAPS_CULLCCW;
+    fakeDesc.dpcTriCaps.dwRasterCaps  = D3DPRASTERCAPS_DITHER | D3DPRASTERCAPS_ZTEST | D3DPRASTERCAPS_FOGVERTEX | D3DPRASTERCAPS_FOGTABLE | D3DPRASTERCAPS_ANISOTROPY;
+    fakeDesc.dpcTriCaps.dwZCmpCaps    = 0xFF;
+    fakeDesc.dpcTriCaps.dwSrcBlendCaps  = 0x1FFF;
+    fakeDesc.dpcTriCaps.dwDestBlendCaps = 0x1FFF;
+    fakeDesc.dpcTriCaps.dwAlphaCmpCaps  = 0xFF;
+    fakeDesc.dpcTriCaps.dwShadeCaps     = 0xFF;
+    fakeDesc.dpcTriCaps.dwTextureCaps   = D3DPTEXTURECAPS_PERSPECTIVE | D3DPTEXTURECAPS_ALPHA | D3DPTEXTURECAPS_TRANSPARENCY;
+    fakeDesc.dpcTriCaps.dwTextureFilterCaps  = 0x3FFFF;
+    fakeDesc.dpcTriCaps.dwTextureBlendCaps   = 0xFF;
+    fakeDesc.dpcTriCaps.dwTextureAddressCaps = 0x1F;
+    fakeDesc.dpcLineCaps = fakeDesc.dpcTriCaps;
+
+    fakeDesc.dwDeviceRenderBitDepth  = 1280;
+    fakeDesc.dwDeviceZBufferBitDepth = 1536;
+    fakeDesc.dwMinTextureWidth  = 1;
+    fakeDesc.dwMinTextureHeight = 1;
+    fakeDesc.dwMaxTextureWidth  = 16384;
+    fakeDesc.dwMaxTextureHeight = 16384;
+    fakeDesc.dwMaxTextureRepeat      = 32768;
+    fakeDesc.dwMaxTextureAspectRatio = 32768;
+    fakeDesc.dwMaxAnisotropy = 16;
+    fakeDesc.wMaxTextureBlendStages   = 4;
+    fakeDesc.wMaxSimultaneousTextures = 4;
+    fakeDesc.dwMaxActiveLights = 8;
+    fakeDesc.dvMaxVertexW = 1e10f;
+    fakeDesc.deviceGUID = {0xF5049E78, 0x4861, 0x11D2, {0xA4, 0x07, 0x00, 0xA0, 0xC9, 0x06, 0x29, 0xA8}};
+    fakeDesc.wMaxUserClipPlanes      = 6;
+    fakeDesc.wMaxVertexBlendMatrices = 4;
+    fakeDesc.dwVertexProcessingCaps  = D3DVTXPCAPS_TEXGEN | D3DVTXPCAPS_MATERIALSOURCE7 | D3DVTXPCAPS_DIRECTIONALLIGHTS | D3DVTXPCAPS_POSITIONALLIGHTS | D3DVTXPCAPS_LOCALVIEWER;
+    fakeDesc.dwStencilCaps     = 0xFF;
+    fakeDesc.dwFVFCaps         = D3DFVFCAPS_DONOTSTRIPELEMENTS | 8;
+    fakeDesc.dwTextureOpCaps   = 0x3FFFFFF;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::QueryInterface(REFIID, void** ppv) { DbgPrint("Device7::QI"); *ppv = this; AddRef(); return S_OK; }
+ULONG   STDMETHODCALLTYPE StubDirect3DDevice7::AddRef() { return ++refCount; }
+ULONG   STDMETHODCALLTYPE StubDirect3DDevice7::Release() { if (--refCount == 0) { delete this; return 0; } return refCount; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetCaps(LPD3DDEVICEDESC7 d) { DbgPrint("Device7::GetCaps"); if (d) *d = fakeDesc; return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID ctx) {
+    DbgPrint("Device7::EnumTextureFormats");
+    DDPIXELFORMAT fmts[] = {
+        {sizeof(DDPIXELFORMAT), DDPF_RGB, 0, 16, 0xF800, 0x7E0, 0x1F, 0x00},
+        {sizeof(DDPIXELFORMAT), DDPF_RGB | DDPF_ALPHAPIXELS, 0, 16, 0x7C00, 0x3E0, 0x1F, 0x8000},
+        {sizeof(DDPIXELFORMAT), DDPF_RGB | DDPF_ALPHAPIXELS, 0, 16, 0xF00, 0xF0, 0x0F, 0xF000},
+        {sizeof(DDPIXELFORMAT), DDPF_RGB, 0, 32, 0xFF0000, 0xFF00, 0xFF, 0x00},
+        {sizeof(DDPIXELFORMAT), DDPF_RGB | DDPF_ALPHAPIXELS, 0, 32, 0xFF0000, 0xFF00, 0xFF, 0xFF000000},
+        {sizeof(DDPIXELFORMAT), DDPF_FOURCC, FOURCC_DXT1, 0, 0, 0, 0, 0},
+        {sizeof(DDPIXELFORMAT), DDPF_FOURCC, FOURCC_DXT3, 0, 0, 0, 0, 0},
+        {sizeof(DDPIXELFORMAT), DDPF_FOURCC, FOURCC_DXT5, 0, 0, 0, 0, 0},
+    };
+    for (auto& f : fmts) cb(&f, ctx);
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndScene() { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetDirect3D(IDirect3D7** pp) { if (pp) *pp = nullptr; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderTarget(LPDIRECTDRAWSURFACE7, DWORD) { DbgPrint("Device7::SetRenderTarget"); return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetRenderTarget(LPDIRECTDRAWSURFACE7* pp) { if (pp) *pp = nullptr; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::Clear(DWORD, LPD3DRECT, DWORD, D3DCOLOR, D3DVALUE, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetViewport(LPD3DVIEWPORT7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::MultiplyTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetViewport(LPD3DVIEWPORT7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetMaterial(LPD3DMATERIAL7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetMaterial(LPD3DMATERIAL7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetLight(DWORD, LPD3DLIGHT7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetLight(DWORD, LPD3DLIGHT7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderState(D3DRENDERSTATETYPE, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetRenderState(D3DRENDERSTATETYPE, LPDWORD v) { if (v) *v = 0; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginStateBlock() { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndStateBlock(LPDWORD h) { if (h) *h = 1; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::PreLoad(LPDIRECTDRAWSURFACE7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE, DWORD, LPVOID, DWORD, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVETYPE, DWORD, LPVOID, DWORD, LPWORD, DWORD, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetClipStatus(LPD3DCLIPSTATUS) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetClipStatus(LPD3DCLIPSTATUS) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveStrided(D3DPRIMITIVETYPE, DWORD, LPD3DDRAWPRIMITIVESTRIDEDDATA, DWORD, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveStrided(D3DPRIMITIVETYPE, DWORD, LPD3DDRAWPRIMITIVESTRIDEDDATA, DWORD, LPWORD, DWORD, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE, LPDIRECT3DVERTEXBUFFER7, DWORD, DWORD, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITIVETYPE, LPDIRECT3DVERTEXBUFFER7, DWORD, DWORD, LPWORD, DWORD, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::ComputeSphereVisibility(LPD3DVECTOR, LPD3DVALUE, DWORD, DWORD, LPDWORD ret) { if (ret) *ret = 0; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTexture(DWORD, LPDIRECTDRAWSURFACE7* pp) { if (pp) *pp = nullptr; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTexture(DWORD, LPDIRECTDRAWSURFACE7) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTextureStageState(DWORD, D3DTEXTURESTAGESTATETYPE, LPDWORD v) { if (v) *v = 0; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTextureStageState(DWORD, D3DTEXTURESTAGESTATETYPE, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::ValidateDevice(LPDWORD p) { if (p) *p = 1; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::ApplyStateBlock(DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::CaptureStateBlock(DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DeleteStateBlock(DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::CreateStateBlock(D3DSTATEBLOCKTYPE, LPDWORD h) { if (h) *h = 1; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::Load(LPDIRECTDRAWSURFACE7, LPPOINT, LPDIRECTDRAWSURFACE7, LPRECT, DWORD) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::LightEnable(DWORD, BOOL) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetLightEnable(DWORD, BOOL* b) { if (b) *b = FALSE; return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetClipPlane(DWORD, D3DVALUE*) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetClipPlane(DWORD, D3DVALUE*) { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetInfo(DWORD, LPVOID, DWORD) { return S_OK; }
