@@ -3,15 +3,37 @@
 #include <cstdio>
 
 static HWND g_gothicHwnd = nullptr;
+static WNDPROC g_origGothicWndProc = nullptr;
 static HWND g_hwnd = nullptr;
 static HDC g_hdc = nullptr;
 static HGLRC g_hglrc = nullptr;
 static bool g_initialized = false;
-static bool g_windowCreated = false;
+static volatile bool g_ready = false;
 static volatile bool g_running = false;
 static HANDLE g_thread = nullptr;
+static HANDLE g_readyEvent = nullptr;
+
+static int g_gameWidth = 800;
+static int g_gameHeight = 600;
 
 static const char* WND_CLASS = "GOpenGL_WND";
+
+static LRESULT CALLBACK GothicSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_SHOWWINDOW:
+        if (wp == TRUE) return 0;
+        break;
+    case WM_WINDOWPOSCHANGING: {
+        WINDOWPOS* pos = (WINDOWPOS*)lp;
+        pos->flags &= ~SWP_SHOWWINDOW;
+        break;
+    }
+    case WM_STYLECHANGING:
+    case WM_DISPLAYCHANGE:
+        return 0;
+    }
+    return CallWindowProcA(g_origGothicWndProc, hwnd, msg, wp, lp);
+}
 
 static void EnableVisualStyles() {
     static const char manifest[] =
@@ -54,6 +76,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_ERASEBKGND:
         return 1;
+
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+    case WM_CHAR:
+        if (g_gothicHwnd) PostMessageA(g_gothicHwnd, msg, wp, lp);
+        return 0;
+
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP:
+    case WM_MOUSEWHEEL:
+        if (g_gothicHwnd) PostMessageA(g_gothicHwnd, msg, wp, lp);
+        return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
@@ -86,6 +122,7 @@ static DWORD WINAPI GLThreadProc(LPVOID) {
     if (!g_hwnd) {
         printf("[GOpenGL] ERROR: Failed to create GL window\n");
         fflush(stdout);
+        SetEvent(g_readyEvent);
         return 1;
     }
 
@@ -106,14 +143,17 @@ static DWORD WINAPI GLThreadProc(LPVOID) {
     g_hglrc = wglCreateContext(g_hdc);
     wglMakeCurrent(g_hdc, g_hglrc);
 
-    printf("[GOpenGL] OpenGL window created: %s\n", (const char*)glGetString(GL_RENDERER));
+    printf("[GOpenGL] OpenGL context created: %s\n", (const char*)glGetString(GL_RENDERER));
     fflush(stdout);
 
-    g_running = true;
-    g_windowCreated = true;
-    float xOffset = 0.0f;
-    float direction = 1.0f;
+    // Release context so the game thread can acquire it
+    wglMakeCurrent(nullptr, nullptr);
 
+    g_running = true;
+    g_ready = true;
+    SetEvent(g_readyEvent);
+
+    // Message pump only -- no rendering on this thread
     while (g_running) {
         MSG msg;
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -124,52 +164,12 @@ static DWORD WINAPI GLThreadProc(LPVOID) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
-        if (!g_running) break;
-
-        RECT rc;
-        GetClientRect(g_hwnd, &rc);
-        int w = rc.right - rc.left;
-        int h = rc.bottom - rc.top;
-
-        if (w > 0 && h > 0) {
-            glViewport(0, 0, w, h);
-            glMatrixMode(GL_PROJECTION);
-            glLoadIdentity();
-            float aspect = (float)w / (float)h;
-            glOrtho(-aspect, aspect, -1.0, 1.0, -1.0, 1.0);
-            glMatrixMode(GL_MODELVIEW);
-            glLoadIdentity();
-
-            glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-            xOffset += 0.01f * direction;
-            if (xOffset > 0.8f) direction = -1.0f;
-            if (xOffset < -0.8f) direction = 1.0f;
-
-            glBegin(GL_TRIANGLES);
-                glColor3f(1.0f, 0.0f, 0.0f);
-                glVertex2f(xOffset + 0.0f,  0.6f);
-                glColor3f(0.0f, 1.0f, 0.0f);
-                glVertex2f(xOffset - 0.6f, -0.4f);
-                glColor3f(0.0f, 0.0f, 1.0f);
-                glVertex2f(xOffset + 0.6f, -0.4f);
-            glEnd();
-
-            SwapBuffers(g_hdc);
-        }
-
-        Sleep(16);
+        Sleep(1);
     }
 
-    wglMakeCurrent(nullptr, nullptr);
-    wglDeleteContext(g_hglrc);
-    g_hglrc = nullptr;
-    ReleaseDC(g_hwnd, g_hdc);
-    g_hdc = nullptr;
-    DestroyWindow(g_hwnd);
-    UnregisterClassA(WND_CLASS, hInst);
-    g_hwnd = nullptr;
+    HINSTANCE hI = GetModuleHandleA(nullptr);
+    if (g_hwnd) { DestroyWindow(g_hwnd); g_hwnd = nullptr; }
+    UnregisterClassA(WND_CLASS, hI);
     return 0;
 }
 
@@ -182,34 +182,83 @@ void GOpenGL_OnSetWindow(HWND hwnd) {
     printf("[GOpenGL] Captured Gothic HWND=0x%p, hiding it\n", hwnd);
     fflush(stdout);
 
+    g_origGothicWndProc = (WNDPROC)SetWindowLongPtrA(hwnd, GWLP_WNDPROC, (LONG_PTR)GothicSubclassProc);
     ShowWindow(hwnd, SW_HIDE);
 
+    g_readyEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     g_thread = CreateThread(nullptr, 0, GLThreadProc, nullptr, 0, nullptr);
+
+    WaitForSingleObject(g_readyEvent, 5000);
+    CloseHandle(g_readyEvent);
+    g_readyEvent = nullptr;
+
+    if (g_ready) {
+        printf("[GOpenGL] Window thread ready, context available for game thread\n");
+        fflush(stdout);
+    }
+}
+
+bool GOpenGL_AcquireContext() {
+    if (!g_ready || !g_hdc || !g_hglrc) return false;
+    return wglMakeCurrent(g_hdc, g_hglrc) == TRUE;
 }
 
 void GOpenGL_OnPresent() {
     if (!g_initialized) return;
 
-    if (g_gothicHwnd && IsWindowVisible(g_gothicHwnd)) {
-        ShowWindow(g_gothicHwnd, SW_HIDE);
-    }
-
-    MSG msg;
-    while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessageA(&msg);
+    if (g_hdc) {
+        SwapBuffers(g_hdc);
     }
 }
 
 void GOpenGL_StopOpenGL() {
     if (g_running) {
         g_running = false;
+        if (g_hglrc) {
+            wglMakeCurrent(nullptr, nullptr);
+        }
         if (g_thread) {
+            PostThreadMessageA(GetThreadId(g_thread), WM_QUIT, 0, 0);
             WaitForSingleObject(g_thread, 3000);
             CloseHandle(g_thread);
             g_thread = nullptr;
         }
+        if (g_hglrc) {
+            wglDeleteContext(g_hglrc);
+            g_hglrc = nullptr;
+        }
+        if (g_hdc && g_hwnd) {
+            ReleaseDC(g_hwnd, g_hdc);
+            g_hdc = nullptr;
+        }
     }
     g_initialized = false;
-    g_windowCreated = false;
+    g_ready = false;
 }
+
+void GOpenGL_SetGameResolution(int w, int h) {
+    g_gameWidth = w;
+    g_gameHeight = h;
+    printf("[GOpenGL] Game resolution set to %dx%d\n", w, h);
+    fflush(stdout);
+}
+
+HDC GOpenGL_GetDC() { return g_hdc; }
+HWND GOpenGL_GetHWND() { return g_hwnd; }
+
+int GOpenGL_GetWindowWidth() {
+    if (!g_hwnd) return 800;
+    RECT rc;
+    GetClientRect(g_hwnd, &rc);
+    return rc.right - rc.left;
+}
+
+int GOpenGL_GetWindowHeight() {
+    if (!g_hwnd) return 600;
+    RECT rc;
+    GetClientRect(g_hwnd, &rc);
+    return rc.bottom - rc.top;
+}
+
+int GOpenGL_GetGameWidth()  { return g_gameWidth; }
+int GOpenGL_GetGameHeight() { return g_gameHeight; }

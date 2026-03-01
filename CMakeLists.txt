@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(ddraw SHARED
     src/dllmain.cpp
+    src/renderer/gl_renderer.cpp
     src/renderer/gl_window.cpp
     src/proxy/proxy_surface7.cpp
     src/proxy/proxy_device7.cpp

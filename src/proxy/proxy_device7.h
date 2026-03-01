@@ -2,9 +2,23 @@
 
 #include <d3d.h>
 
+class StubDirectDrawSurface7;
+
 class StubDirect3DDevice7 : public IDirect3DDevice7 {
     int refCount = 1;
     D3DDEVICEDESC7 fakeDesc = {};
+
+    bool contextAcquired = false;
+    StubDirectDrawSurface7* boundTextures[8] = {};
+
+    DWORD srcBlend = 2; // D3DBLEND_ONE
+    DWORD dstBlend = 1; // D3DBLEND_ZERO
+    bool alphaBlendEnabled = false;
+    bool alphaTestEnabled = false;
+    DWORD alphaRef = 0;
+    bool zEnabled = true;
+
+    void EnsureContext();
 
 public:
     StubDirect3DDevice7();

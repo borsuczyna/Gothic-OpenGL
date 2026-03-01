@@ -1,6 +1,19 @@
 #include "proxy_device7.h"
+#include "proxy_surface7.h"
 #include "../debug.h"
+#include "../renderer/gl_renderer.h"
+#include "../renderer/gl_window.h"
 #include <cstring>
+
+void StubDirect3DDevice7::EnsureContext() {
+    if (!contextAcquired) {
+        if (GOpenGL_AcquireContext()) {
+            GLRenderer::Init();
+            contextAcquired = true;
+            DbgPrint("Device7: GL context acquired on game thread");
+        }
+    }
+}
 
 StubDirect3DDevice7::StubDirect3DDevice7() {
     memset(&fakeDesc, 0, sizeof(fakeDesc));
@@ -69,12 +82,37 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EnumTextureFormats(LPD3DENUMPIXEL
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndScene() { return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() {
+    EnsureContext();
+    if (contextAcquired) {
+        int ww = GOpenGL_GetWindowWidth();
+        int wh = GOpenGL_GetWindowHeight();
+        int gw = GOpenGL_GetGameWidth();
+        int gh = GOpenGL_GetGameHeight();
+        DbgPrint("Device7::BeginScene (window=%dx%d game=%dx%d)", ww, wh, gw, gh);
+        GLRenderer::BeginFrame(ww, wh, gw, gh);
+    }
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndScene() {
+    DbgPrint("Device7::EndScene");
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetDirect3D(IDirect3D7** pp) { if (pp) *pp = nullptr; return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderTarget(LPDIRECTDRAWSURFACE7, DWORD) { DbgPrint("Device7::SetRenderTarget"); return S_OK; }
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderTarget(LPDIRECTDRAWSURFACE7, DWORD) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetRenderTarget(LPDIRECTDRAWSURFACE7* pp) { if (pp) *pp = nullptr; return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::Clear(DWORD, LPD3DRECT, DWORD, D3DCOLOR, D3DVALUE, DWORD) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::Clear(DWORD count, LPD3DRECT rects, DWORD flags, D3DCOLOR color, D3DVALUE z, DWORD stencil) {
+    DbgPrint("Device7::Clear flags=0x%X color=0x%08X", flags, color);
+    EnsureContext();
+    if (contextAcquired) {
+        GLRenderer::Clear(flags, color, z, stencil);
+    }
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTransform(D3DTRANSFORMSTATETYPE, LPD3DMATRIX) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetViewport(LPD3DVIEWPORT7) { return S_OK; }
@@ -84,22 +122,177 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetMaterial(LPD3DMATERIAL7) { ret
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetMaterial(LPD3DMATERIAL7) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetLight(DWORD, LPD3DLIGHT7) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetLight(DWORD, LPD3DLIGHT7) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderState(D3DRENDERSTATETYPE, DWORD) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderState(D3DRENDERSTATETYPE state, DWORD value) {
+    switch (state) {
+    case D3DRENDERSTATE_ALPHABLENDENABLE:
+        alphaBlendEnabled = (value != 0);
+        if (contextAcquired) GLRenderer::SetAlphaBlendEnabled(alphaBlendEnabled);
+        break;
+    case D3DRENDERSTATE_SRCBLEND:
+        srcBlend = value;
+        if (contextAcquired) GLRenderer::SetBlendFunc(srcBlend, dstBlend);
+        break;
+    case D3DRENDERSTATE_DESTBLEND:
+        dstBlend = value;
+        if (contextAcquired) GLRenderer::SetBlendFunc(srcBlend, dstBlend);
+        break;
+    case D3DRENDERSTATE_ALPHATESTENABLE:
+        alphaTestEnabled = (value != 0);
+        if (contextAcquired) GLRenderer::SetAlphaTestEnabled(alphaTestEnabled);
+        break;
+    case D3DRENDERSTATE_ALPHAREF:
+        alphaRef = value;
+        if (contextAcquired) GLRenderer::SetAlphaRef(alphaRef);
+        break;
+    case D3DRENDERSTATE_ZENABLE:
+        zEnabled = (value != 0);
+        if (contextAcquired) GLRenderer::SetDepthEnabled(zEnabled);
+        break;
+    default:
+        break;
+    }
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetRenderState(D3DRENDERSTATETYPE, LPDWORD v) { if (v) *v = 0; return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginStateBlock() { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndStateBlock(LPDWORD h) { if (h) *h = 1; return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::PreLoad(LPDIRECTDRAWSURFACE7) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE, DWORD, LPVOID, DWORD, DWORD) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVETYPE, DWORD, LPVOID, DWORD, LPWORD, DWORD, DWORD) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, LPVOID verts, DWORD count, DWORD) {
+    DbgPrint("Device7::DrawPrimitive type=%d fvf=0x%X count=%u ctx=%d tex0=%p",
+             type, fvf, count, contextAcquired, boundTextures[0]);
+    if (!contextAcquired || !verts || count == 0) return S_OK;
+
+    if (boundTextures[0]) {
+        if (boundTextures[0]->IsTextureDirty()) {
+            boundTextures[0]->UploadTextureToGL();
+        }
+        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+    } else {
+        GLRenderer::BindTexture(0);
+    }
+
+    GLRenderer::DrawPrimitive(type, fvf, verts, count);
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, LPVOID verts, DWORD vertCount, LPWORD indices, DWORD idxCount, DWORD) {
+    if (!contextAcquired || !verts || !indices || idxCount == 0) return S_OK;
+
+    if (boundTextures[0]) {
+        if (boundTextures[0]->IsTextureDirty()) {
+            boundTextures[0]->UploadTextureToGL();
+        }
+        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+    } else {
+        GLRenderer::BindTexture(0);
+    }
+
+    GLRenderer::DrawIndexedPrimitive(type, fvf, verts, vertCount, indices, idxCount);
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetClipStatus(LPD3DCLIPSTATUS) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetClipStatus(LPD3DCLIPSTATUS) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveStrided(D3DPRIMITIVETYPE, DWORD, LPD3DDRAWPRIMITIVESTRIDEDDATA, DWORD, DWORD) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveStrided(D3DPRIMITIVETYPE, DWORD, LPD3DDRAWPRIMITIVESTRIDEDDATA, DWORD, LPWORD, DWORD, DWORD) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE, LPDIRECT3DVERTEXBUFFER7, DWORD, DWORD, DWORD) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITIVETYPE, LPDIRECT3DVERTEXBUFFER7, DWORD, DWORD, LPWORD, DWORD, DWORD) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE type, LPDIRECT3DVERTEXBUFFER7 vb, DWORD startVertex, DWORD numVertices, DWORD flags) {
+    if (!contextAcquired || !vb || numVertices == 0) return S_OK;
+
+    D3DVERTEXBUFFERDESC vbDesc = {};
+    vb->GetVertexBufferDesc(&vbDesc);
+    DWORD fvf = vbDesc.dwFVF;
+
+    LPVOID data = nullptr;
+    vb->Lock(0, &data, nullptr);
+    if (!data) return S_OK;
+
+    // Calculate stride to offset by startVertex
+    DWORD stride = 0;
+    switch (fvf & D3DFVF_POSITION_MASK) {
+        case D3DFVF_XYZ:    stride = 12; break;
+        case D3DFVF_XYZRHW: stride = 16; break;
+        default:             stride = 16; break;
+    }
+    if (fvf & D3DFVF_NORMAL)   stride += 12;
+    if (fvf & D3DFVF_DIFFUSE)  stride += 4;
+    if (fvf & D3DFVF_SPECULAR) stride += 4;
+    stride += ((fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT) * 8;
+
+    const unsigned char* verts = (const unsigned char*)data + startVertex * stride;
+
+    if (boundTextures[0]) {
+        if (boundTextures[0]->IsTextureDirty()) {
+            boundTextures[0]->UploadTextureToGL();
+        }
+        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+    } else {
+        GLRenderer::BindTexture(0);
+    }
+
+    GLRenderer::DrawPrimitive(type, fvf, verts, numVertices);
+
+    vb->Unlock();
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITIVETYPE type, LPDIRECT3DVERTEXBUFFER7 vb, DWORD startVertex, DWORD numVertices, LPWORD indices, DWORD idxCount, DWORD) {
+    if (!contextAcquired || !vb || !indices || idxCount == 0) return S_OK;
+
+    D3DVERTEXBUFFERDESC vbDesc = {};
+    vb->GetVertexBufferDesc(&vbDesc);
+    DWORD fvf = vbDesc.dwFVF;
+
+    LPVOID data = nullptr;
+    vb->Lock(0, &data, nullptr);
+    if (!data) return S_OK;
+
+    DWORD stride = 0;
+    switch (fvf & D3DFVF_POSITION_MASK) {
+        case D3DFVF_XYZ:    stride = 12; break;
+        case D3DFVF_XYZRHW: stride = 16; break;
+        default:             stride = 16; break;
+    }
+    if (fvf & D3DFVF_NORMAL)   stride += 12;
+    if (fvf & D3DFVF_DIFFUSE)  stride += 4;
+    if (fvf & D3DFVF_SPECULAR) stride += 4;
+    stride += ((fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT) * 8;
+
+    const unsigned char* verts = (const unsigned char*)data + startVertex * stride;
+
+    if (boundTextures[0]) {
+        if (boundTextures[0]->IsTextureDirty()) {
+            boundTextures[0]->UploadTextureToGL();
+        }
+        GLRenderer::BindTexture(boundTextures[0]->GetGLTextureId());
+    } else {
+        GLRenderer::BindTexture(0);
+    }
+
+    GLRenderer::DrawIndexedPrimitive(type, fvf, verts, numVertices, indices, idxCount);
+
+    vb->Unlock();
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::ComputeSphereVisibility(LPD3DVECTOR, LPD3DVALUE, DWORD, DWORD, LPDWORD ret) { if (ret) *ret = 0; return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTexture(DWORD, LPDIRECTDRAWSURFACE7* pp) { if (pp) *pp = nullptr; return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTexture(DWORD, LPDIRECTDRAWSURFACE7) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTexture(DWORD stage, LPDIRECTDRAWSURFACE7* pp) {
+    if (pp) *pp = (stage < 8) ? (LPDIRECTDRAWSURFACE7)boundTextures[stage] : nullptr;
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTexture(DWORD stage, LPDIRECTDRAWSURFACE7 tex) {
+    if (stage >= 8) return S_OK;
+    boundTextures[stage] = static_cast<StubDirectDrawSurface7*>(tex);
+    DbgPrint("Device7::SetTexture stage=%u surf=%p glTex=%u",
+             stage, tex, boundTextures[stage] ? boundTextures[stage]->GetGLTextureId() : 0);
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTextureStageState(DWORD, D3DTEXTURESTAGESTATETYPE, LPDWORD v) { if (v) *v = 0; return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTextureStageState(DWORD, D3DTEXTURESTAGESTATETYPE, DWORD) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::ValidateDevice(LPDWORD p) { if (p) *p = 1; return S_OK; }

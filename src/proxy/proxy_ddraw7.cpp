@@ -98,7 +98,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateSurface(LPDDSURFACEDESC2 d, LPD
         if (!isFourCC) {
             surf->InitAsRGB(tw, th, tbpp);
         } else {
-            surf->InitAsRGB(tw, th, 32);
+            surf->InitAsFourCC(tw, th, d->ddpfPixelFormat.dwFourCC);
         }
 
         if (caps & DDSCAPS_MIPMAP) {
@@ -110,7 +110,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::CreateSurface(LPDDSURFACEDESC2 d, LPD
                 if (!isFourCC) {
                     mip->InitAsRGB(mw, mh, tbpp);
                 } else {
-                    mip->InitAsRGB(mw > 4 ? mw : 4, mh > 4 ? mh : 4, 32);
+                    mip->InitAsFourCC(mw > 4 ? mw : 4, mh > 4 ? mh : 4, d->ddpfPixelFormat.dwFourCC);
                 }
                 prev->AttachBackBuffer(mip);
                 prev = mip;
@@ -182,6 +182,7 @@ HRESULT STDMETHODCALLTYPE StubDirectDraw7::SetDisplayMode(DWORD w, DWORD h, DWOR
     displayMode.dwHeight = h;
     displayMode.dwRefreshRate = refresh;
     displayMode.ddpfPixelFormat.dwRGBBitCount = bpp;
+    GOpenGL_SetGameResolution(w, h);
     return S_OK;
 }
 

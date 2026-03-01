@@ -1,15 +1,25 @@
 #include "proxy_surface7.h"
 #include "../debug.h"
+#include "../renderer/gl_renderer.h"
 #include <cstring>
 
 void StubDirectDrawSurface7::EnsureSurfaceBuffer() {
     if (surfaceData.empty() && desc.dwWidth > 0 && desc.dwHeight > 0) {
-        DWORD bpp = desc.ddpfPixelFormat.dwRGBBitCount;
-        if (bpp == 0) bpp = desc.ddpfPixelFormat.dwZBufferBitDepth;
-        if (bpp == 0) bpp = 32;
-        DWORD pitch = desc.dwWidth * ((bpp + 7) / 8);
-        desc.lPitch = pitch;
-        surfaceData.resize(pitch * desc.dwHeight, 0);
+        if (desc.ddpfPixelFormat.dwFlags & DDPF_FOURCC) {
+            DWORD blockSize = 16;
+            if (desc.ddpfPixelFormat.dwFourCC == FOURCC_DXT1) blockSize = 8;
+            DWORD blocksW = (desc.dwWidth + 3) / 4;
+            DWORD blocksH = (desc.dwHeight + 3) / 4;
+            desc.lPitch = blocksW * blockSize;
+            surfaceData.resize(blocksW * blocksH * blockSize, 0);
+        } else {
+            DWORD bpp = desc.ddpfPixelFormat.dwRGBBitCount;
+            if (bpp == 0) bpp = desc.ddpfPixelFormat.dwZBufferBitDepth;
+            if (bpp == 0) bpp = 32;
+            DWORD pitch = desc.dwWidth * ((bpp + 7) / 8);
+            desc.lPitch = pitch;
+            surfaceData.resize(pitch * desc.dwHeight, 0);
+        }
         desc.lpSurface = surfaceData.data();
     }
 }
@@ -17,6 +27,13 @@ void StubDirectDrawSurface7::EnsureSurfaceBuffer() {
 StubDirectDrawSurface7::StubDirectDrawSurface7(const char* surfaceTag) : tag(surfaceTag) {
     memset(&desc, 0, sizeof(desc));
     desc.dwSize = sizeof(desc);
+}
+
+StubDirectDrawSurface7::~StubDirectDrawSurface7() {
+    if (glTextureId) {
+        GLRenderer::FreeTexture(glTextureId);
+        glTextureId = 0;
+    }
 }
 
 void StubDirectDrawSurface7::SetDesc(LPDDSURFACEDESC2 d) {
@@ -55,9 +72,39 @@ void StubDirectDrawSurface7::InitAsZBuffer(DWORD w, DWORD h, const DDPIXELFORMAT
     EnsureSurfaceBuffer();
 }
 
+void StubDirectDrawSurface7::InitAsFourCC(DWORD w, DWORD h, DWORD fourCC) {
+    desc.dwWidth = w;
+    desc.dwHeight = h;
+    desc.dwFlags |= DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT | DDSD_CAPS;
+    desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+    desc.ddpfPixelFormat.dwFlags = DDPF_FOURCC;
+    desc.ddpfPixelFormat.dwFourCC = fourCC;
+    EnsureSurfaceBuffer();
+}
+
 void StubDirectDrawSurface7::AttachBackBuffer(StubDirectDrawSurface7* bb) {
     attached = bb;
     if (attached) attached->AddRef();
+}
+
+void StubDirectDrawSurface7::UploadTextureToGL() {
+    if (!textureDirty) return;
+    textureDirty = false;
+
+    if (surfaceData.empty() || desc.dwWidth == 0 || desc.dwHeight == 0) return;
+
+    if (glTextureId == 0) {
+        glTextureId = GLRenderer::UploadTexture(
+            desc.dwWidth, desc.dwHeight,
+            surfaceData.data(), desc.lPitch,
+            desc.ddpfPixelFormat);
+    } else {
+        GLRenderer::UpdateTexture(
+            glTextureId,
+            desc.dwWidth, desc.dwHeight,
+            surfaceData.data(), desc.lPitch,
+            desc.ddpfPixelFormat);
+    }
 }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::QueryInterface(REFIID, void** ppv) {
@@ -88,7 +135,6 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddAttachedSurface(LPDIRECTDRA
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::AddOverlayDirtyRect(LPRECT) { return S_OK; }
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Blt(LPRECT, LPDIRECTDRAWSURFACE7, LPRECT, DWORD, LPDDBLTFX) {
-    GOpenGL_OnPresent();
     return S_OK;
 }
 
@@ -197,7 +243,12 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetClipper(LPDIRECTDRAWCLIPPER
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetColorKey(DWORD, LPDDCOLORKEY) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetOverlayPosition(LONG, LONG) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetPalette(LPDIRECTDRAWPALETTE) { return S_OK; }
-HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Unlock(LPRECT) { return S_OK; }
+
+HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::Unlock(LPRECT) {
+    textureDirty = true;
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::UpdateOverlay(LPRECT, LPDIRECTDRAWSURFACE7, LPRECT, DWORD, LPDDOVERLAYFX) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::UpdateOverlayDisplay(DWORD) { return S_OK; }
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::UpdateOverlayZOrder(DWORD, LPDIRECTDRAWSURFACE7) { return S_OK; }
@@ -207,7 +258,13 @@ HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::PageUnlock(DWORD) { return S_O
 
 HRESULT STDMETHODCALLTYPE StubDirectDrawSurface7::SetSurfaceDesc(LPDDSURFACEDESC2 d, DWORD) {
     DbgPrint("  Surf[%s]::SetSurfaceDesc", tag);
-    if (d) { desc = *d; desc.dwSize = sizeof(DDSURFACEDESC2); surfaceData.clear(); EnsureSurfaceBuffer(); }
+    if (d) {
+        desc = *d;
+        desc.dwSize = sizeof(DDSURFACEDESC2);
+        surfaceData.clear();
+        EnsureSurfaceBuffer();
+        textureDirty = true;
+    }
     return S_OK;
 }
 
