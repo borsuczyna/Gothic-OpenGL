@@ -22,6 +22,9 @@ struct PushConstants {
     uint32_t stage0Args = 0;
     uint32_t stage1Args = 0;
     uint32_t texCoordIdx = 0;
+    uint32_t stage0AlphaOp = 2;
+    uint32_t stage0AlphaArgs = (1u << 16) | 2u;
+    uint32_t textureFactor = 0xFFFFFFFF;
 };
 
 struct PipelineKey {

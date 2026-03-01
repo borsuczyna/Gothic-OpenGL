@@ -41,6 +41,10 @@ static DWORD s_stage0Arg1 = 2;    // D3DTA_TEXTURE
 static DWORD s_stage0Arg2 = 0;    // D3DTA_DIFFUSE
 static DWORD s_stage1Arg1 = 2;    // D3DTA_TEXTURE
 static DWORD s_stage1Arg2 = 1;    // D3DTA_CURRENT
+static DWORD s_stage0AlphaOp   = 2; // D3DTOP_SELECTARG1
+static DWORD s_stage0AlphaArg1 = 2; // D3DTA_TEXTURE
+static DWORD s_stage0AlphaArg2 = 1; // D3DTA_CURRENT
+static DWORD s_textureFactor   = 0xFFFFFFFF;
 static DWORD s_stage1AddrU = D3DTADDRESS_WRAP;
 static DWORD s_stage1AddrV = D3DTADDRESS_WRAP;
 static DWORD s_stage0TexCoordIdx = 0;
@@ -477,11 +481,8 @@ static void CreateWhiteTexture() {
     s_whiteTex.mipLevels = 1;
 }
 
-static int s_debugFrameCount = 0;
-
 void Init() {
     if (s_initialized) return;
-    printf("[GVulkan] VkRenderer::Init() starting\n"); fflush(stdout);
     VkDevice device = GVulkan_GetDevice();
 
     VkCommandPoolCreateInfo cpci = {};
@@ -556,7 +557,6 @@ void Init() {
     MakeIdentity(s_projMatrix);
 
     s_initialized = true;
-    printf("[GVulkan] VkRenderer::Init() complete\n"); fflush(stdout);
 }
 
 void Shutdown() {
@@ -606,17 +606,10 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     }
 
     VkCommandBuffer cmd = s_cmdBufs[s_frameIndex];
-    if (!GVulkan_BeginFrame(cmd)) {
-        if (s_debugFrameCount < 5)
-            printf("[GVulkan] BeginFrame FAILED (frame %d)\n", s_debugFrameCount);
-        fflush(stdout);
+    if (!GVulkan_BeginFrame(cmd))
         return;
-    }
 
     s_frameActive = true;
-    if (s_debugFrameCount < 5)
-        printf("[GVulkan] BeginFrame OK (frame %d, idx=%d)\n", s_debugFrameCount, s_frameIndex);
-    fflush(stdout);
     s_vertexOffset = 0;
     s_indexOffset = 0;
     s_curVerts  = s_vertexMapped[s_frameIndex];
@@ -640,20 +633,12 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
 void EndFrame() {
     if (!s_frameActive) return;
     s_frameActive = false;
-    if (s_debugFrameCount < 5)
-        printf("[GVulkan] EndFrame (frame %d, idx=%d)\n", s_debugFrameCount, s_frameIndex);
-    fflush(stdout);
     GVulkan_EndFrame(s_cmdBufs[s_frameIndex]);
     s_frameIndex = (s_frameIndex + 1) % MAX_FRAMES;
-    s_debugFrameCount++;
 }
 
 void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
-    if (!s_frameActive) {
-        if (s_debugFrameCount < 5) { printf("[GVulkan] Clear SKIPPED (frame not active)\n"); fflush(stdout); }
-        return;
-    }
-    if (s_debugFrameCount < 5) { printf("[GVulkan] Clear flags=%lu color=0x%08X\n", flags, color); fflush(stdout); }
+    if (!s_frameActive) return;
 
     uint32_t count = 0;
     VkClearAttachment atts[2] = {};
@@ -697,6 +682,13 @@ VkTexHandle* UploadTexture(DWORD w, DWORD h, const void* data, DWORD pitch, cons
     VkFormat vkFmt = compressed ? FourCCToVkFormat(fmt.dwFourCC) : VK_FORMAT_R8G8B8A8_UNORM;
     if (vkFmt == VK_FORMAT_UNDEFINED) { delete tex; return nullptr; }
     tex->format = vkFmt;
+
+    if (compressed) {
+        DWORD cc = fmt.dwFourCC;
+        tex->hasAlpha = (cc == MAKEFOURCC('D','X','T','3') || cc == MAKEFOURCC('D','X','T','5'));
+    } else {
+        tex->hasAlpha = (fmt.dwFlags & DDPF_ALPHAPIXELS) != 0;
+    }
 
     uint32_t mips = (uint32_t)totalMipLevels;
     if (mips <= 1) mips = 1;
@@ -844,6 +836,20 @@ void SetStageColorArg(int stage, int argIndex, DWORD value) {
         else               s_stage1Arg2 = value;
     }
 }
+
+void SetStageAlphaOp(int stage, DWORD op) {
+    if (stage == 0) s_stage0AlphaOp = op;
+}
+
+void SetStageAlphaArg(int stage, int argIndex, DWORD value) {
+    value &= 0xF;
+    if (stage == 0) {
+        if (argIndex == 1) s_stage0AlphaArg1 = value;
+        else               s_stage0AlphaArg2 = value;
+    }
+}
+
+void SetTextureFactor(DWORD factor) { s_textureFactor = factor; }
 
 void SetTextureAddress2U(DWORD d3dAddr) { s_stage1AddrU = d3dAddr; }
 void SetTextureAddress2V(DWORD d3dAddr) { s_stage1AddrV = d3dAddr; }
@@ -1004,16 +1010,9 @@ static void ComputeMVP(float* mvp, bool isRHW) {
     }
 }
 
-static int s_drawCount = 0;
-
 static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
                          DWORD count, const WORD* indices, DWORD indexCount) {
     if (!s_frameActive || count == 0) return;
-    if (s_drawCount < 3) {
-        printf("[GVulkan] Draw: type=%d fvf=0x%lX verts=%lu idx=%lu\n", type, fvf, count, indexCount);
-        fflush(stdout);
-        s_drawCount++;
-    }
 
     bool isRHW = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
     DWORD stride = CalcFVFStride(fvf);
@@ -1054,12 +1053,16 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     if (s_boundTexture) pc.flags |= 1;
     if (s_alphaTestEnabled) pc.flags |= 2;
     if (s_boundTexture2 && s_stage1ColorOp > 1) pc.flags |= 4;
+    if (s_boundTexture && s_boundTexture->hasAlpha) pc.flags |= 8;
     pc.alphaRef = s_alphaRef / 255.0f;
     pc.stage0ColorOp = s_stage0ColorOp;
     pc.stage1ColorOp = s_stage1ColorOp;
     pc.stage0Args = (s_stage0Arg2 << 16) | s_stage0Arg1;
     pc.stage1Args = (s_stage1Arg2 << 16) | s_stage1Arg1;
     pc.texCoordIdx = (s_stage1TexCoordIdx << 16) | s_stage0TexCoordIdx;
+    pc.stage0AlphaOp = s_stage0AlphaOp;
+    pc.stage0AlphaArgs = (s_stage0AlphaArg2 << 16) | s_stage0AlphaArg1;
+    pc.textureFactor = s_textureFactor;
 
     PipelineKey key = {};
     key.blendEnabled = s_blendEnabled ? 1 : 0;

@@ -15,6 +15,7 @@ struct VkTexHandle {
     uint32_t        height   = 0;
     uint32_t        mipLevels = 1;
     VkFormat        format   = VK_FORMAT_R8G8B8A8_UNORM;
+    bool            hasAlpha  = false;
 };
 
 namespace VkRenderer {
@@ -43,7 +44,10 @@ void SetDepthWriteEnabled(bool enabled);
 void SetDepthFunc(DWORD d3dFunc);
 void SetStageColorOp(int stage, DWORD op);
 void SetStageColorArg(int stage, int argIndex, DWORD value);
+void SetStageAlphaOp(int stage, DWORD op);
+void SetStageAlphaArg(int stage, int argIndex, DWORD value);
 void SetStageTexCoordIndex(int stage, DWORD value);
+void SetTextureFactor(DWORD factor);
 void SetTextureAddress2U(DWORD d3dAddr);
 void SetTextureAddress2V(DWORD d3dAddr);
 

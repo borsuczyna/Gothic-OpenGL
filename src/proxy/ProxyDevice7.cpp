@@ -4,103 +4,6 @@
 #include "../renderer/VkRenderer.h"
 #include "../renderer/VkWindow.h"
 #include <cstring>
-#include <cstdio>
-
-static FILE* g_drawLog = nullptr;
-static int g_drawLogFrames = 0;
-static int g_drawLogCalls = 0;
-
-static void InitDrawLog() {
-    if (!g_drawLog) {
-        const char* paths[] = {
-            "C:\\Users\\libxx\\Desktop\\gvlk_drawlog.txt",
-            "gvlk_drawlog.txt",
-            nullptr
-        };
-        for (int i = 0; paths[i]; i++) {
-            g_drawLog = fopen(paths[i], "w");
-            if (g_drawLog) break;
-        }
-        g_drawLogFrames = 0;
-        g_drawLogCalls = 0;
-    }
-}
-
-static void LogDrawCall(const char* func, D3DPRIMITIVETYPE type, DWORD fvf,
-                        DWORD vertCount, DWORD idxCount,
-                        StubDirectDrawSurface7* tex0, StubDirectDrawSurface7* tex1,
-                        const unsigned char* vertData, DWORD stride) {
-    if (!g_drawLog || g_drawLogFrames > 5) return;
-    g_drawLogCalls++;
-
-    DWORD texCount = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
-    fprintf(g_drawLog, "[%d] %s type=%d fvf=0x%08lX stride=%lu verts=%lu idx=%lu texSets=%lu",
-            g_drawLogCalls, func, type, fvf, stride, vertCount, idxCount, texCount);
-
-    if (tex0) {
-        auto& d = tex0->GetDescRef();
-        fprintf(g_drawLog, " tex0=%dx%d", d.dwWidth, d.dwHeight);
-        if (d.ddpfPixelFormat.dwFlags & DDPF_FOURCC)
-            fprintf(g_drawLog, "(%.4s)", (char*)&d.ddpfPixelFormat.dwFourCC);
-        else
-            fprintf(g_drawLog, "(%dbpp)", d.ddpfPixelFormat.dwRGBBitCount);
-    } else {
-        fprintf(g_drawLog, " tex0=NULL");
-    }
-    if (tex1) {
-        auto& d = tex1->GetDescRef();
-        fprintf(g_drawLog, " tex1=%dx%d", d.dwWidth, d.dwHeight);
-        if (d.ddpfPixelFormat.dwFlags & DDPF_FOURCC)
-            fprintf(g_drawLog, "(%.4s)", (char*)&d.ddpfPixelFormat.dwFourCC);
-        else
-            fprintf(g_drawLog, "(%dbpp)", d.ddpfPixelFormat.dwRGBBitCount);
-    } else {
-        fprintf(g_drawLog, " tex1=NULL");
-    }
-    fprintf(g_drawLog, "\n");
-
-    if (texCount >= 2 && vertData && stride > 0) {
-        int posSize = 12;
-        if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) posSize = 16;
-        int off = posSize;
-        if (fvf & D3DFVF_NORMAL) off += 12;
-        if (fvf & D3DFVF_DIFFUSE) off += 4;
-        if (fvf & D3DFVF_SPECULAR) off += 4;
-
-        static const int tcSizes[] = {2, 3, 4, 1};
-        int uv0Floats = tcSizes[(fvf >> 16) & 3];
-        int uv0Off = off;
-        int uv1Off = off + uv0Floats * 4;
-
-        int numToLog = vertCount < 4 ? vertCount : 4;
-        for (int i = 0; i < numToLog; i++) {
-            const unsigned char* v = vertData + i * stride;
-            float u0 = *(float*)(v + uv0Off);
-            float v0 = (uv0Floats >= 2) ? *(float*)(v + uv0Off + 4) : 0.f;
-            float u1 = *(float*)(v + uv1Off);
-            int uv1Floats = tcSizes[(fvf >> 18) & 3];
-            float v1 = (uv1Floats >= 2) ? *(float*)(v + uv1Off + 4) : 0.f;
-            float px = *(float*)(v + 0);
-            float py = *(float*)(v + 4);
-            float pz = *(float*)(v + 8);
-            fprintf(g_drawLog, "  v[%d] pos=(%.1f,%.1f,%.1f) uv0=(%.4f,%.4f) uv1=(%.4f,%.4f)\n",
-                    i, px, py, pz, u0, v0, u1, v1);
-        }
-    }
-    fflush(g_drawLog);
-}
-
-static void LogFrameEnd() {
-    if (g_drawLog && g_drawLogFrames <= 5) {
-        g_drawLogFrames++;
-        fprintf(g_drawLog, "=== FRAME %d END ===\n", g_drawLogFrames);
-        fflush(g_drawLog);
-        if (g_drawLogFrames > 5) {
-            fclose(g_drawLog);
-            g_drawLog = nullptr;
-        }
-    }
-}
 
 static DWORD CalcFVFStride(DWORD fvf) {
     DWORD stride = 0;
@@ -124,7 +27,6 @@ static DWORD CalcFVFStride(DWORD fvf) {
 }
 
 void StubDirect3DDevice7::EnsureContext() {
-    InitDrawLog();
     if (!contextAcquired) {
         if (GVulkan_IsReady()) {
             VkRenderer::Init();
@@ -224,7 +126,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() {
 }
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EndScene() {
-    LogFrameEnd();
     return S_OK;
 }
 
@@ -326,6 +227,10 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetRenderState(D3DRENDERSTATETYPE
         zFunc = value;
         if (contextAcquired) VkRenderer::SetDepthFunc(zFunc);
         break;
+    case D3DRENDERSTATE_TEXTUREFACTOR:
+        textureFactor = value;
+        if (contextAcquired) VkRenderer::SetTextureFactor(textureFactor);
+        break;
     default:
         break;
     }
@@ -353,8 +258,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE ty
         VkRenderer::BindTexture2(nullptr);
     }
 
-    LogDrawCall("DrawPrim", type, fvf, count, 0, boundTextures[0], boundTextures[1],
-                (const unsigned char*)verts, CalcFVFStride(fvf));
     VkRenderer::DrawPrimitive(type, fvf, verts, count);
     return S_OK;
 }
@@ -375,8 +278,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVE
         VkRenderer::BindTexture2(nullptr);
     }
 
-    LogDrawCall("DrawIdxPrim", type, fvf, vertCount, idxCount, boundTextures[0], boundTextures[1],
-                (const unsigned char*)verts, CalcFVFStride(fvf));
     VkRenderer::DrawIndexedPrimitive(type, fvf, verts, vertCount, indices, idxCount);
     return S_OK;
 }
@@ -413,7 +314,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE 
         VkRenderer::BindTexture2(nullptr);
     }
 
-    LogDrawCall("DrawPrimVB", type, fvf, numVertices, 0, boundTextures[0], boundTextures[1], verts, stride);
     VkRenderer::DrawPrimitive(type, fvf, verts, numVertices);
 
     vb->Unlock();
@@ -447,7 +347,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITI
         VkRenderer::BindTexture2(nullptr);
     }
 
-    LogDrawCall("DrawIdxPrimVB", type, fvf, numVertices, idxCount, boundTextures[0], boundTextures[1], verts, stride);
     VkRenderer::DrawIndexedPrimitive(type, fvf, verts, numVertices, indices, idxCount);
 
     vb->Unlock();
@@ -471,15 +370,6 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTextureStageState(DWORD, D3DTE
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value) {
     if (!contextAcquired) return S_OK;
-    if (g_drawLog && g_drawLogFrames <= 5 && stage < 2 &&
-        (type == D3DTSS_COLOROP || type == D3DTSS_COLORARG1 || type == D3DTSS_COLORARG2 ||
-         type == D3DTSS_ALPHAOP || type == D3DTSS_TEXCOORDINDEX)) {
-        const char* names[] = {"COLOROP","COLORARG1","COLORARG2","ALPHAOP","","","","","","","","TEXCOORDINDEX"};
-        int idx = (type <= 3) ? type - 1 : (type == 11 ? 11 : -1);
-        fprintf(g_drawLog, "  TSS stage=%lu %s(%d)=%lu\n", stage,
-                (idx >= 0 && idx < 12) ? names[idx] : "?", type, value);
-        fflush(g_drawLog);
-    }
     if (stage < 2) {
         switch (type) {
         case D3DTSS_COLOROP:
@@ -490,6 +380,15 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTextureStageState(DWORD stage,
             break;
         case D3DTSS_COLORARG2:
             VkRenderer::SetStageColorArg(stage, 2, value);
+            break;
+        case D3DTSS_ALPHAOP:
+            VkRenderer::SetStageAlphaOp(stage, value);
+            break;
+        case D3DTSS_ALPHAARG1:
+            VkRenderer::SetStageAlphaArg(stage, 1, value);
+            break;
+        case D3DTSS_ALPHAARG2:
+            VkRenderer::SetStageAlphaArg(stage, 2, value);
             break;
         case D3DTSS_TEXCOORDINDEX:
             VkRenderer::SetStageTexCoordIndex(stage, value);

@@ -16,6 +16,7 @@ class StubDirect3DDevice7 : public IDirect3DDevice7 {
     bool alphaBlendEnabled = false;
     bool alphaTestEnabled = false;
     DWORD alphaRef = 0;
+    DWORD textureFactor = 0xFFFFFFFF;
     bool zEnabled = true;
     bool zWriteEnabled = true;
     DWORD zFunc = D3DCMP_LESSEQUAL;
