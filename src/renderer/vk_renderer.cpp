@@ -67,19 +67,26 @@ static const int MAX_FRAMES = 2;
 static VkCommandBuffer s_cmdBufs[MAX_FRAMES] = {};
 static int             s_frameIndex = 0;
 
-static VkBuffer       s_vertexBuffer    = VK_NULL_HANDLE;
-static VmaAllocation  s_vertexAlloc     = VK_NULL_HANDLE;
-static GVertex*       s_vertexMapped    = nullptr;
-static uint32_t       s_vertexOffset    = 0;
 static const uint32_t VERTEX_BUFFER_SIZE = 16 * 1024 * 1024;
 static const uint32_t MAX_VERTICES = VERTEX_BUFFER_SIZE / sizeof(GVertex);
-
-static VkBuffer       s_indexBuffer     = VK_NULL_HANDLE;
-static VmaAllocation  s_indexAlloc      = VK_NULL_HANDLE;
-static uint16_t*      s_indexMapped     = nullptr;
-static uint32_t       s_indexOffset     = 0;
 static const uint32_t INDEX_BUFFER_SIZE = 4 * 1024 * 1024;
 static const uint32_t MAX_INDICES = INDEX_BUFFER_SIZE / sizeof(uint16_t);
+
+static VkBuffer       s_vertexBuffer[MAX_FRAMES]  = {};
+static VmaAllocation  s_vertexAlloc[MAX_FRAMES]    = {};
+static GVertex*       s_vertexMapped[MAX_FRAMES]   = {};
+
+static VkBuffer       s_indexBuffer[MAX_FRAMES]    = {};
+static VmaAllocation  s_indexAlloc[MAX_FRAMES]     = {};
+static uint16_t*      s_indexMapped[MAX_FRAMES]    = {};
+
+static uint32_t       s_vertexOffset    = 0;
+static uint32_t       s_indexOffset     = 0;
+
+static GVertex*       s_curVerts        = nullptr;
+static uint16_t*      s_curIdx          = nullptr;
+static VkBuffer       s_curVertBuf      = VK_NULL_HANDLE;
+static VkBuffer       s_curIdxBuf       = VK_NULL_HANDLE;
 
 static VkBuffer       s_stagingBuffer   = VK_NULL_HANDLE;
 static VmaAllocation  s_stagingAlloc    = VK_NULL_HANDLE;
@@ -536,10 +543,12 @@ void Init() {
     cbai.commandBufferCount = MAX_FRAMES;
     vkAllocateCommandBuffers(device, &cbai, s_cmdBufs);
 
-    CreateBuffer(VERTEX_BUFFER_SIZE, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                 VMA_MEMORY_USAGE_CPU_TO_GPU, s_vertexBuffer, s_vertexAlloc, (void**)&s_vertexMapped);
-    CreateBuffer(INDEX_BUFFER_SIZE, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                 VMA_MEMORY_USAGE_CPU_TO_GPU, s_indexBuffer, s_indexAlloc, (void**)&s_indexMapped);
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        CreateBuffer(VERTEX_BUFFER_SIZE, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VMA_MEMORY_USAGE_CPU_TO_GPU, s_vertexBuffer[i], s_vertexAlloc[i], (void**)&s_vertexMapped[i]);
+        CreateBuffer(INDEX_BUFFER_SIZE, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                     VMA_MEMORY_USAGE_CPU_TO_GPU, s_indexBuffer[i], s_indexAlloc[i], (void**)&s_indexMapped[i]);
+    }
     CreateBuffer(STAGING_BUFFER_SIZE, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                  VMA_MEMORY_USAGE_CPU_ONLY, s_stagingBuffer, s_stagingAlloc, &s_stagingMapped);
 
@@ -615,8 +624,10 @@ void Shutdown() {
     if (s_vertModule)       vkDestroyShaderModule(device, s_vertModule, nullptr);
     if (s_fragModule)       vkDestroyShaderModule(device, s_fragModule, nullptr);
 
-    if (s_vertexBuffer) vmaDestroyBuffer(GVulkan_GetAllocator(), s_vertexBuffer, s_vertexAlloc);
-    if (s_indexBuffer)  vmaDestroyBuffer(GVulkan_GetAllocator(), s_indexBuffer, s_indexAlloc);
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        if (s_vertexBuffer[i]) vmaDestroyBuffer(GVulkan_GetAllocator(), s_vertexBuffer[i], s_vertexAlloc[i]);
+        if (s_indexBuffer[i])  vmaDestroyBuffer(GVulkan_GetAllocator(), s_indexBuffer[i], s_indexAlloc[i]);
+    }
     if (s_stagingBuffer) vmaDestroyBuffer(GVulkan_GetAllocator(), s_stagingBuffer, s_stagingAlloc);
 
     if (s_cmdPool) vkDestroyCommandPool(device, s_cmdPool, nullptr);
@@ -653,6 +664,10 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     fflush(stdout);
     s_vertexOffset = 0;
     s_indexOffset = 0;
+    s_curVerts  = s_vertexMapped[s_frameIndex];
+    s_curIdx    = s_indexMapped[s_frameIndex];
+    s_curVertBuf = s_vertexBuffer[s_frameIndex];
+    s_curIdxBuf  = s_indexBuffer[s_frameIndex];
 
     VkExtent2D ext = GVulkan_GetSwapExtent();
     VkViewport vp = {};
@@ -927,9 +942,9 @@ static void ConvertFanToList(const unsigned char* srcVerts, DWORD fvf, DWORD str
     for (DWORD i = 1; i + 1 < count; i++) {
         GVertex v1 = ConvertVertex(srcVerts + i * stride, fvf);
         GVertex v2 = ConvertVertex(srcVerts + (i + 1) * stride, fvf);
-        s_vertexMapped[s_vertexOffset++] = v0;
-        s_vertexMapped[s_vertexOffset++] = v1;
-        s_vertexMapped[s_vertexOffset++] = v2;
+        s_curVerts[s_vertexOffset++] = v0;
+        s_curVerts[s_vertexOffset++] = v1;
+        s_curVerts[s_vertexOffset++] = v2;
         outVertCount += 3;
     }
 }
@@ -993,12 +1008,12 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
         vertCount = count;
         if (s_vertexOffset + count > MAX_VERTICES || s_indexOffset + indexCount > MAX_INDICES) return;
         for (DWORD i = 0; i < count; i++)
-            s_vertexMapped[s_vertexOffset + i] = ConvertVertex(src + i * stride, fvf);
+            s_curVerts[s_vertexOffset + i] = ConvertVertex(src + i * stride, fvf);
         s_vertexOffset += count;
 
         idxStart = s_indexOffset;
         idxCount2 = indexCount;
-        memcpy(s_indexMapped + s_indexOffset, indices, indexCount * sizeof(uint16_t));
+        memcpy(s_curIdx + s_indexOffset, indices, indexCount * sizeof(uint16_t));
         s_indexOffset += indexCount;
     } else if (isFan) {
         ConvertFanToList(src, fvf, stride, count, vertStart, vertCount);
@@ -1008,7 +1023,7 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
         vertCount = count;
         if (s_vertexOffset + count > MAX_VERTICES) return;
         for (DWORD i = 0; i < count; i++)
-            s_vertexMapped[s_vertexOffset + i] = ConvertVertex(src + i * stride, fvf);
+            s_curVerts[s_vertexOffset + i] = ConvertVertex(src + i * stride, fvf);
         s_vertexOffset += count;
     }
 
@@ -1068,11 +1083,11 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     vkCmdSetScissor(s_cmdBufs[s_frameIndex], 0, 1, &scissor);
 
     VkDeviceSize vbOffset = vertStart * sizeof(GVertex);
-    vkCmdBindVertexBuffers(s_cmdBufs[s_frameIndex], 0, 1, &s_vertexBuffer, &vbOffset);
+    vkCmdBindVertexBuffers(s_cmdBufs[s_frameIndex], 0, 1, &s_curVertBuf, &vbOffset);
 
     if (idxCount2 > 0) {
         VkDeviceSize ibOffset = idxStart * sizeof(uint16_t);
-        vkCmdBindIndexBuffer(s_cmdBufs[s_frameIndex], s_indexBuffer, ibOffset, VK_INDEX_TYPE_UINT16);
+        vkCmdBindIndexBuffer(s_cmdBufs[s_frameIndex], s_curIdxBuf, ibOffset, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(s_cmdBufs[s_frameIndex], idxCount2, 1, 0, 0, 0);
     } else {
         vkCmdDraw(s_cmdBufs[s_frameIndex], vertCount, 1, 0, 0);
