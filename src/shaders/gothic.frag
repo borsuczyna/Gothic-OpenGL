@@ -12,6 +12,7 @@ layout(push_constant) uniform PushConstants {
     uint stage0AlphaOp;
     uint stage0AlphaArgs; // low 16 = alphaArg1, high 16 = alphaArg2
     uint textureFactor;   // packed ARGB
+    uint timecycleColor;  // packed ARGB, replaces diffuse for world geometry
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D texSampler;
@@ -59,6 +60,16 @@ vec4 runStage(uint op, uint args, vec4 current, vec4 diffuse, vec4 texColor, vec
 
 void main() {
     vec4 diffuse = fragColor;
+
+    // Replace vertex diffuse with timecycle color for world geometry (flag bit 4 = 16)
+    if ((pc.flags & 16u) != 0u) {
+        diffuse = vec4(
+            float((pc.timecycleColor >> 16u) & 0xFFu) / 255.0,
+            float((pc.timecycleColor >>  8u) & 0xFFu) / 255.0,
+            float( pc.timecycleColor         & 0xFFu) / 255.0,
+            diffuse.a
+        );
+    }
 
     vec4 tfactor = vec4(
         float((pc.textureFactor >> 16u) & 0xFFu) / 255.0,

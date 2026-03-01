@@ -11,6 +11,7 @@ add_library(ddraw SHARED
     src/renderer/ImGuiManager.cpp
     src/renderer/Pipeline.cpp
     src/renderer/TextureUtils.cpp
+    src/renderer/TimeCycle.cpp
     src/renderer/volk/volk.c
     src/imgui/imgui.cpp
     src/imgui/imgui_draw.cpp

@@ -116,6 +116,9 @@ if %DO_DEPLOY%==1 (
 
     copy /y "%BUILD_DIR%\ddraw.dll" "%GOTHIC_DIR%\ddraw.dll" >nul
     echo [DEPLOY] ddraw.dll copied to Gothic system dir
+    if not exist "%GOTHIC_DIR%\GVulkan\" mkdir "%GOTHIC_DIR%\GVulkan"
+    copy /y "%PROJECT_DIR%timecycle.cfg" "%GOTHIC_DIR%\GVulkan\timecycle.cfg" >nul
+    echo [DEPLOY] timecycle.cfg copied to Gothic system/GVulkan dir
 )
 
 echo.

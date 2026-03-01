@@ -25,6 +25,7 @@ struct PushConstants {
     uint32_t stage0AlphaOp = 2;
     uint32_t stage0AlphaArgs = (1u << 16) | 2u;
     uint32_t textureFactor = 0xFFFFFFFF;
+    uint32_t timecycleColor = 0xFFFFFFFF;
 };
 
 struct PipelineKey {

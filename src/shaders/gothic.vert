@@ -9,6 +9,10 @@ layout(push_constant) uniform PushConstants {
     uint stage0Args;
     uint stage1Args;
     uint texCoordIdx;
+    uint stage0AlphaOp;
+    uint stage0AlphaArgs;
+    uint textureFactor;
+    uint timecycleColor;
 } pc;
 
 layout(location = 0) in vec3 inPosition;

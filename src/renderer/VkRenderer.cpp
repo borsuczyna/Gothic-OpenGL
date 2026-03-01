@@ -1,10 +1,12 @@
 #include "VkRenderer.h"
 #include "ImGuiManager.h"
+#include "TimeCycle.h"
 #include "Types.h"
 #include "Pipeline.h"
 #include "TextureUtils.h"
 #include "../shaders/GothicShaders.h"
 #include <vector>
+#include <string>
 #include <cstring>
 #include <unordered_map>
 
@@ -92,6 +94,8 @@ static VkShaderModule s_fragModule = VK_NULL_HANDLE;
 
 static VkTexHandle    s_whiteTex;
 static VkSampler      s_defaultSampler = VK_NULL_HANDLE;
+
+static gvlk::TimeCycle s_timeCycle;
 
 static VkSampler      s_currentSamplerU = VK_NULL_HANDLE;
 static VkSampler      s_currentSamplerV = VK_NULL_HANDLE;
@@ -558,6 +562,21 @@ void Init() {
 
     s_initialized = true;
 
+    {
+        char dllPath[MAX_PATH] = {};
+        HMODULE hm = nullptr;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(&Init), &hm);
+        GetModuleFileNameA(hm, dllPath, MAX_PATH);
+        std::string dir(dllPath);
+        auto sep = dir.find_last_of("\\/");
+        if (sep != std::string::npos) dir = dir.substr(0, sep + 1);
+        std::string gvlkDir = dir + "GVulkan\\";
+        CreateDirectoryA(gvlkDir.c_str(), nullptr);
+        s_timeCycle.Load(gvlkDir + "timecycle.cfg");
+    }
+
     ImGuiManager::Init();
 }
 
@@ -599,6 +618,7 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
         EndFrame();
     }
 
+    s_timeCycle.Update();
     ImGuiManager::PollInput();
 
     s_windowW = windowW;
@@ -1074,6 +1094,10 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     pc.stage0AlphaOp = s_stage0AlphaOp;
     pc.stage0AlphaArgs = (s_stage0AlphaArg2 << 16) | s_stage0AlphaArg1;
     pc.textureFactor = s_textureFactor;
+    if (!isRHW && s_timeCycle.IsEnabled()) {
+        pc.flags |= 16u;
+        pc.timecycleColor = s_timeCycle.GetPackedColor();
+    }
 
     PipelineKey key = {};
     key.blendEnabled = s_blendEnabled ? 1 : 0;
