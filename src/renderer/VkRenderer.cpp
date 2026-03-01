@@ -1063,7 +1063,8 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
 
     PipelineKey key = {};
     key.blendEnabled = s_blendEnabled ? 1 : 0;
-    key.depthTestEnabled = (!isRHW && s_depthEnabled) ? 1 : 0;
+    // Enable depth test for all draws when app requests it (including RHW/2D particles so they respect scene depth)
+    key.depthTestEnabled = s_depthEnabled ? 1 : 0;
     key.depthWriteEnabled = (!isRHW && s_depthWriteEnabled) ? 1 : 0;
     key.depthFunc = (uint8_t)s_depthFunc;
     key.srcBlend = (uint8_t)s_srcBlend;
