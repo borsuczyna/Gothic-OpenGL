@@ -2,6 +2,7 @@
 #include "../imgui/imgui.h"
 #include "../imgui/backends/imgui_impl_vulkan.h"
 #include "../imgui/backends/imgui_impl_win32.h"
+#include "../gothic/Gothic.h"
 #include <cstdio>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -138,6 +139,46 @@ void NewFrame() {
     if (ImGui::Begin("GVulkan Debug", &s_menuVisible)) {
         ImGui::Text("Window: %dx%d", GVulkan_GetWindowWidth(), GVulkan_GetWindowHeight());
         ImGui::Text("Game:   %dx%d", GVulkan_GetGameWidth(), GVulkan_GetGameHeight());
+        ImGui::Separator();
+
+        // --- Gothic Game State ---
+        if (ImGui::CollapsingHeader("Gothic Game State", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& gothic = Gothic::Game::Get();
+            if (gothic.IsInGame()) {
+                auto timer = Gothic::Game::GetTimerInfo();
+                ImGui::Text("FPS: %.1f  dt: %.1fms", Gothic::Game::GetFPS(), timer.frameTimeMs);
+                ImGui::Text("Total: %.1fs  Paused: %s", timer.totalTimeSec,
+                            Gothic::Game::IsPaused() ? "Yes" : "No");
+
+                auto player = Gothic::Game::GetPlayerPosition();
+                if (player.valid) {
+                    ImGui::Text("Player: (%.0f, %.0f, %.0f)", player.pos.x, player.pos.y, player.pos.z);
+                }
+
+                auto cam = Gothic::Game::GetCameraInfo();
+                if (cam.valid) {
+                    ImGui::Text("Camera: near=%.1f far=%.0f", cam.nearPlane, cam.farPlane);
+                    if (cam.screenFadeEnabled) ImGui::Text("  Screen Fade ON");
+                    if (cam.cinemaScopeEnabled) ImGui::Text("  Cinema Scope ON");
+                }
+
+                auto sky = Gothic::Game::GetSkyInfo();
+                if (sky.valid) {
+                    ImGui::Text("Time: %.2fh  %s", sky.masterTime * 24.0f,
+                                Gothic::Game::IsNight() ? "(Night)" : "(Day)");
+                    ImGui::Text("Weather: %s  Rain: %.0f%%",
+                                sky.weather == Gothic::WEATHER_SNOW ? "Snow" : "Rain",
+                                sky.rainWeight * 100.0f);
+                    ImGui::Text("Fog: (%.0f,%.0f,%.0f) dist=%.0f",
+                                sky.masterState.fogColor.x, sky.masterState.fogColor.y,
+                                sky.masterState.fogColor.z, sky.masterState.fogDist);
+                    auto sun = Gothic::Game::GetSunDirection();
+                    ImGui::Text("Sun dir: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
+                }
+            } else {
+                ImGui::TextDisabled("Not in game yet");
+            }
+        }
         ImGui::Separator();
 
         ImGui::Text("Resolution");
