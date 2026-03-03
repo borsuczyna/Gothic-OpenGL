@@ -2,6 +2,7 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #define VMA_IMPLEMENTATION
 #include "VkWindow.h"
+#include "VkRenderer.h"
 #include "ImGuiManager.h"
 #include <cstdio>
 #include <vector>
@@ -108,6 +109,10 @@ static void EnableVisualStyles() {
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_KEYDOWN && wp == VK_F11) {
         ImGuiManager::ToggleMenu();
+        return 0;
+    }
+    if (msg == WM_KEYDOWN && wp == VK_F9) {
+        VkRenderer::ToggleShadowDebug();
         return 0;
     }
 
@@ -680,6 +685,10 @@ bool GVulkan_BeginFrame(VkCommandBuffer cmd) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
+    return true;
+}
+
+void GVulkan_BeginMainRenderPass(VkCommandBuffer cmd) {
     VkRenderPassBeginInfo rpBegin = {};
     rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpBegin.renderPass = g_renderPass;
@@ -688,7 +697,6 @@ bool GVulkan_BeginFrame(VkCommandBuffer cmd) {
     rpBegin.renderArea.extent = g_swapExtent;
 
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
-    return true;
 }
 
 void GVulkan_EndFrame(VkCommandBuffer cmd) {

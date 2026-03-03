@@ -72,6 +72,10 @@ if %DO_SHADERS%==1 (
     "%GLSLANG%" -V -o "%SHADER_DIR%\gothic_frag.spv" "%SHADER_DIR%\gothic.frag"
     if errorlevel 1 ( echo FAILED & exit /b 1 )
 
+    echo [SHADER] shadow.frag
+    "%GLSLANG%" -V -o "%SHADER_DIR%\shadow_frag.spv" "%SHADER_DIR%\shadow.frag"
+    if errorlevel 1 ( echo FAILED & exit /b 1 )
+
     echo [SHADER] Generating GothicShaders.h ...
     python "%SHADER_DIR%\spv_to_header.py" "%SHADER_DIR%"
     if errorlevel 1 ( echo FAILED & exit /b 1 )

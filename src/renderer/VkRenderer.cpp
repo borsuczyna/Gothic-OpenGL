@@ -4,10 +4,12 @@
 #include "Types.h"
 #include "Pipeline.h"
 #include "TextureUtils.h"
+#include "ShadowMap.h"
 #include "../shaders/GothicShaders.h"
 #include <vector>
 #include <string>
 #include <cstring>
+#include <cmath>
 #include <unordered_map>
 
 using namespace gvlk;
@@ -101,6 +103,38 @@ static VkSampler      s_currentSamplerU = VK_NULL_HANDLE;
 static VkSampler      s_currentSamplerV = VK_NULL_HANDLE;
 static DWORD          s_addressU = D3DTADDRESS_WRAP;
 static DWORD          s_addressV = D3DTADDRESS_WRAP;
+
+// --- Shadow map state ---
+static gvlk::ShadowMap   s_shadowMap;
+static gvlk::ShadowConfig s_shadowConfig;
+
+static VkShaderModule        s_shadowFragModule = VK_NULL_HANDLE;
+static VkDescriptorSetLayout s_shadowSetLayout  = VK_NULL_HANDLE;
+static VkDescriptorSet       s_shadowDescSet[MAX_FRAMES] = {};
+static VkBuffer              s_shadowUBO[MAX_FRAMES]     = {};
+static VmaAllocation         s_shadowUBOAlloc[MAX_FRAMES] = {};
+static void*                 s_shadowUBOMapped[MAX_FRAMES] = {};
+
+static VkDescriptorSet       s_shadowDebugDescSet[2] = {};
+
+struct RecordedDraw {
+    uint32_t        vertexOffset;
+    uint32_t        vertexCount;
+    uint32_t        indexOffset;
+    uint32_t        indexCount;
+    float           worldMatrix[16];
+    VkDescriptorSet texDescSet;
+    bool            alphaTest;
+    float           alphaRef;
+};
+static std::vector<RecordedDraw> s_recordedDraws;
+static std::vector<RecordedDraw> s_shadowDraws;
+
+static float s_playerPos[3] = {0, 0, 0};
+static float s_sunDir[3] = {-0.5f, -0.8f, 0.3f};
+
+static bool s_debugShadowMaps = true;
+static bool s_shadowEnabled   = true;
 
 static void MakeIdentity(float* m) {
     memset(m, 0, 16 * sizeof(float));
@@ -513,7 +547,9 @@ void Init() {
 
     s_vertModule = CreateShaderModule(g_gothic_vert_spv, sizeof(g_gothic_vert_spv));
     s_fragModule = CreateShaderModule(g_gothic_frag_spv, sizeof(g_gothic_frag_spv));
+    s_shadowFragModule = CreateShaderModule(g_shadow_frag_spv, sizeof(g_shadow_frag_spv));
 
+    // --- Texture descriptor set layout (set 0 and set 1) ---
     VkDescriptorSetLayoutBinding samplerBinding = {};
     samplerBinding.binding = 0;
     samplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -526,31 +562,54 @@ void Init() {
     dslci.pBindings = &samplerBinding;
     vkCreateDescriptorSetLayout(device, &dslci, nullptr, &s_descSetLayout);
 
+    // --- Shadow descriptor set layout (set 2): 2 samplers + 1 UBO ---
+    VkDescriptorSetLayoutBinding shadowBindings[3] = {};
+    shadowBindings[0].binding         = 0;
+    shadowBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    shadowBindings[0].descriptorCount = 1;
+    shadowBindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    shadowBindings[1].binding         = 1;
+    shadowBindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    shadowBindings[1].descriptorCount = 1;
+    shadowBindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    shadowBindings[2].binding         = 2;
+    shadowBindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    shadowBindings[2].descriptorCount = 1;
+    shadowBindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo sdslci = {};
+    sdslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sdslci.bindingCount = 3;
+    sdslci.pBindings    = shadowBindings;
+    vkCreateDescriptorSetLayout(device, &sdslci, nullptr, &s_shadowSetLayout);
+
     VkPushConstantRange pcRange = {};
     pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
     pcRange.size = sizeof(PushConstants);
 
-    VkDescriptorSetLayout setLayouts[2] = { s_descSetLayout, s_descSetLayout };
+    VkDescriptorSetLayout setLayouts[3] = { s_descSetLayout, s_descSetLayout, s_shadowSetLayout };
 
     VkPipelineLayoutCreateInfo plci = {};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plci.setLayoutCount = 2;
+    plci.setLayoutCount = 3;
     plci.pSetLayouts = setLayouts;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcRange;
     vkCreatePipelineLayout(device, &plci, nullptr, &s_pipelineLayout);
 
-    VkDescriptorPoolSize poolSize = {};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 4096;
+    VkDescriptorPoolSize poolSizes[2] = {};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 4096;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = 16;
 
     VkDescriptorPoolCreateInfo dpci = {};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     dpci.maxSets = 4096;
-    dpci.poolSizeCount = 1;
-    dpci.pPoolSizes = &poolSize;
+    dpci.poolSizeCount = 2;
+    dpci.pPoolSizes = poolSizes;
     vkCreateDescriptorPool(device, &dpci, nullptr, &s_descPool);
 
     s_defaultSampler = CreateSampler(1);
@@ -559,6 +618,73 @@ void Init() {
     MakeIdentity(s_worldMatrix);
     MakeIdentity(s_viewMatrix);
     MakeIdentity(s_projMatrix);
+
+    // --- Shadow map resources ---
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        CreateBuffer(sizeof(ShadowUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                     VMA_MEMORY_USAGE_CPU_TO_GPU, s_shadowUBO[i], s_shadowUBOAlloc[i],
+                     &s_shadowUBOMapped[i]);
+        ShadowUBO initUbo = {};
+        initUbo.shadowEnabled = 0.0f;
+        initUbo.shadowStrength = 1.0f;
+        memcpy(s_shadowUBOMapped[i], &initUbo, sizeof(ShadowUBO));
+    }
+
+    s_shadowMap.Init(device, GVulkan_GetAllocator(), s_pipelineLayout,
+                     s_vertModule, s_shadowFragModule, s_shadowConfig);
+
+    // Allocate per-frame shadow descriptor sets (set 2)
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        VkDescriptorSetAllocateInfo sai = {};
+        sai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        sai.descriptorPool     = s_descPool;
+        sai.descriptorSetCount = 1;
+        sai.pSetLayouts        = &s_shadowSetLayout;
+        vkAllocateDescriptorSets(device, &sai, &s_shadowDescSet[i]);
+
+        VkDescriptorImageInfo cascadeImgs[2] = {};
+        for (int c = 0; c < s_shadowConfig.cascadeCount; c++) {
+            cascadeImgs[c].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            cascadeImgs[c].imageView   = s_shadowMap.GetSampleView(c);
+            cascadeImgs[c].sampler     = s_shadowMap.GetSampler();
+        }
+
+        VkDescriptorBufferInfo uboInfo = {};
+        uboInfo.buffer = s_shadowUBO[i];
+        uboInfo.offset = 0;
+        uboInfo.range  = sizeof(ShadowUBO);
+
+        VkWriteDescriptorSet writes[3] = {};
+        writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = s_shadowDescSet[i];
+        writes[0].dstBinding      = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo      = &cascadeImgs[0];
+
+        writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = s_shadowDescSet[i];
+        writes[1].dstBinding      = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo      = &cascadeImgs[1];
+
+        writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet          = s_shadowDescSet[i];
+        writes[2].dstBinding      = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[2].pBufferInfo     = &uboInfo;
+
+        vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+    }
+
+    // Debug overlay descriptor sets (one per cascade, using s_descSetLayout = sampler-only)
+    for (int c = 0; c < s_shadowConfig.cascadeCount; c++) {
+        s_shadowDebugDescSet[c] = AllocateDescriptorSet();
+        UpdateDescriptorSet(s_shadowDebugDescSet[c],
+                            s_shadowMap.GetSampleView(c), s_shadowMap.GetSampler());
+    }
 
     s_initialized = true;
 
@@ -589,6 +715,12 @@ void Shutdown() {
 
     ImGuiManager::Shutdown();
 
+    s_shadowMap.Shutdown(device, GVulkan_GetAllocator());
+
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        if (s_shadowUBO[i]) vmaDestroyBuffer(GVulkan_GetAllocator(), s_shadowUBO[i], s_shadowUBOAlloc[i]);
+    }
+
     if (s_whiteTex.view)    vkDestroyImageView(device, s_whiteTex.view, nullptr);
     if (s_whiteTex.sampler) vkDestroySampler(device, s_whiteTex.sampler, nullptr);
     if (s_whiteTex.image)   vmaDestroyImage(GVulkan_GetAllocator(), s_whiteTex.image, s_whiteTex.alloc);
@@ -597,10 +729,12 @@ void Shutdown() {
 
     if (s_defaultSampler)   vkDestroySampler(device, s_defaultSampler, nullptr);
     if (s_pipelineLayout)   vkDestroyPipelineLayout(device, s_pipelineLayout, nullptr);
+    if (s_shadowSetLayout)  vkDestroyDescriptorSetLayout(device, s_shadowSetLayout, nullptr);
     if (s_descSetLayout)    vkDestroyDescriptorSetLayout(device, s_descSetLayout, nullptr);
     if (s_descPool)         vkDestroyDescriptorPool(device, s_descPool, nullptr);
     if (s_vertModule)       vkDestroyShaderModule(device, s_vertModule, nullptr);
     if (s_fragModule)       vkDestroyShaderModule(device, s_fragModule, nullptr);
+    if (s_shadowFragModule) vkDestroyShaderModule(device, s_shadowFragModule, nullptr);
 
     for (int i = 0; i < MAX_FRAMES; i++) {
         if (s_vertexBuffer[i]) vmaDestroyBuffer(GVulkan_GetAllocator(), s_vertexBuffer[i], s_vertexAlloc[i]);
@@ -611,6 +745,173 @@ void Shutdown() {
     if (s_cmdPool) vkDestroyCommandPool(device, s_cmdPool, nullptr);
 
     s_initialized = false;
+}
+
+static void ExtractCameraPosition() {
+    float* m = s_viewMatrix;
+    s_playerPos[0] = -(m[0] * m[12] + m[1] * m[13] + m[2] * m[14]);
+    s_playerPos[1] = -(m[4] * m[12] + m[5] * m[13] + m[6] * m[14]);
+    s_playerPos[2] = -(m[8] * m[12] + m[9] * m[13] + m[10] * m[14]);
+}
+
+static void ReplayShadowPass(VkCommandBuffer cmd, int cascade) {
+    if (s_shadowDraws.empty()) return;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_shadowMap.GetPipeline());
+
+    uint32_t res = s_shadowMap.GetResolution();
+    VkViewport vp = { 0, 0, (float)res, (float)res, 0.0f, 1.0f };
+    VkRect2D scissor = { {0, 0}, {res, res} };
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    int prevFrameIdx = (s_frameIndex + MAX_FRAMES - 1) % MAX_FRAMES;
+    VkBuffer prevVertBuf = s_vertexBuffer[prevFrameIdx];
+    VkBuffer prevIdxBuf  = s_indexBuffer[prevFrameIdx];
+
+    const float* lightVP = s_shadowMap.GetVPMatrix(cascade);
+
+    for (const auto& draw : s_shadowDraws) {
+        float shadowMVP[16];
+        MatMul(shadowMVP, draw.worldMatrix, lightVP);
+
+        PushConstants pc = {};
+        memcpy(pc.mvp, shadowMVP, 64);
+        pc.flags = draw.alphaTest ? 3u : 0u;
+        pc.alphaRef = draw.alphaRef;
+
+        vkCmdPushConstants(cmd, s_pipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(PushConstants), &pc);
+
+        VkDescriptorSet texSet = draw.texDescSet ? draw.texDescSet : s_whiteTex.descSet;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                s_pipelineLayout, 0, 1, &texSet, 0, nullptr);
+
+        VkDeviceSize vbOffset = draw.vertexOffset * sizeof(GVertex);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &prevVertBuf, &vbOffset);
+
+        if (draw.indexCount > 0) {
+            VkDeviceSize ibOffset = draw.indexOffset * sizeof(uint16_t);
+            vkCmdBindIndexBuffer(cmd, prevIdxBuf, ibOffset, VK_INDEX_TYPE_UINT16);
+            vkCmdDrawIndexed(cmd, draw.indexCount, 1, 0, 0, 0);
+        } else {
+            vkCmdDraw(cmd, draw.vertexCount, 1, 0, 0);
+        }
+    }
+}
+
+static void RenderShadowPasses(VkCommandBuffer cmd) {
+    if (!s_shadowMap.IsValid() || !s_shadowEnabled) return;
+
+    ExtractCameraPosition();
+    s_shadowMap.UpdateCascades(s_playerPos, s_sunDir);
+
+    for (int cascade = 0; cascade < s_shadowMap.GetCascadeCount(); cascade++) {
+        uint32_t res = s_shadowMap.GetResolution();
+        VkClearValue clearVal = {};
+        clearVal.depthStencil = { 1.0f, 0 };
+
+        VkRenderPassBeginInfo rpBegin = {};
+        rpBegin.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpBegin.renderPass      = s_shadowMap.GetRenderPass();
+        rpBegin.framebuffer     = s_shadowMap.GetFramebuffer(cascade);
+        rpBegin.renderArea      = { {0, 0}, {res, res} };
+        rpBegin.clearValueCount = 1;
+        rpBegin.pClearValues    = &clearVal;
+
+        vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+        ReplayShadowPass(cmd, cascade);
+        vkCmdEndRenderPass(cmd);
+    }
+
+    // Update shadow UBO
+    ShadowUBO ubo = {};
+    for (int c = 0; c < s_shadowMap.GetCascadeCount(); c++)
+        memcpy(ubo.cascadeVP[c], s_shadowMap.GetVPMatrix(c), 64);
+    ubo.shadowStrength = s_shadowConfig.shadowStrength;
+    ubo.shadowEnabled  = s_shadowEnabled ? 1.0f : 0.0f;
+    memcpy(s_shadowUBOMapped[s_frameIndex], &ubo, sizeof(ShadowUBO));
+}
+
+static void DrawShadowDebugOverlay(VkCommandBuffer cmd) {
+    if (!s_debugShadowMaps || !s_shadowMap.IsValid()) return;
+
+    VkExtent2D ext = GVulkan_GetSwapExtent();
+    float screenW = (float)ext.width;
+    float screenH = (float)ext.height;
+
+    const float quadSize = 200.0f;
+    const float padding  = 10.0f;
+
+    for (int cascade = 0; cascade < s_shadowMap.GetCascadeCount(); cascade++) {
+        float x0 = padding + cascade * (quadSize + padding);
+        float y0 = padding;
+        float x1 = x0 + quadSize;
+        float y1 = y0 + quadSize;
+
+        if (s_vertexOffset + 6 > MAX_VERTICES) return;
+        uint32_t vertStart = s_vertexOffset;
+
+        GVertex verts[6] = {};
+        verts[0] = { x0, y0, 0,  0xFFFFFFFF, 0.0f, 0.0f,  0, 0,  0, 0, 0 };
+        verts[1] = { x1, y0, 0,  0xFFFFFFFF, 1.0f, 0.0f,  0, 0,  0, 0, 0 };
+        verts[2] = { x0, y1, 0,  0xFFFFFFFF, 0.0f, 1.0f,  0, 0,  0, 0, 0 };
+        verts[3] = { x1, y0, 0,  0xFFFFFFFF, 1.0f, 0.0f,  0, 0,  0, 0, 0 };
+        verts[4] = { x1, y1, 0,  0xFFFFFFFF, 1.0f, 1.0f,  0, 0,  0, 0, 0 };
+        verts[5] = { x0, y1, 0,  0xFFFFFFFF, 0.0f, 1.0f,  0, 0,  0, 0, 0 };
+
+        memcpy(s_curVerts + s_vertexOffset, verts, sizeof(verts));
+        s_vertexOffset += 6;
+
+        PushConstants pc = {};
+        float gw = screenW, gh = screenH;
+        memset(pc.mvp, 0, 64);
+        pc.mvp[0]  =  2.0f / gw;
+        pc.mvp[5]  =  2.0f / gh;
+        pc.mvp[10] =  1.0f;
+        pc.mvp[12] = -1.0f;
+        pc.mvp[13] = -1.0f;
+        pc.mvp[15] =  1.0f;
+
+        pc.flags = 33;   // bit 0 = has texture, bit 5 = 2D (skip shadow in frag)
+        pc.stage0ColorOp  = 2;    // SELECTARG1
+        pc.stage0Args     = 2;    // arg1 = TEXTURE
+        pc.stage1ColorOp  = 1;    // DISABLE
+        pc.stage0AlphaOp  = 2;    // SELECTARG1
+        pc.stage0AlphaArgs = (1u << 16) | 2u;
+        pc.textureFactor  = 0xFFFFFFFF;
+
+        PipelineKey key = {};
+        key.blendEnabled      = 0;
+        key.depthTestEnabled  = 0;
+        key.depthWriteEnabled = 0;
+        key.depthFunc         = D3DCMP_ALWAYS;
+
+        VkPipeline pipeline = GetOrCreatePipeline(key);
+        if (pipeline == VK_NULL_HANDLE) continue;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdPushConstants(cmd, s_pipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(PushConstants), &pc);
+
+        VkDescriptorSet descSets[2] = {
+            s_shadowDebugDescSet[cascade],
+            s_whiteTex.descSet
+        };
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+
+        VkViewport vp = { 0, 0, screenW, screenH, 0.0f, 1.0f };
+        VkRect2D scissor = { {0, 0}, ext };
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        VkDeviceSize vbOffset = vertStart * sizeof(GVertex);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &s_curVertBuf, &vbOffset);
+        vkCmdDraw(cmd, 6, 1, 0, 0);
+    }
 }
 
 void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
@@ -635,6 +936,12 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     if (!GVulkan_BeginFrame(cmd))
         return;
 
+    // Shadow depth passes (before main render pass)
+    RenderShadowPasses(cmd);
+
+    // Begin the main color+depth render pass
+    GVulkan_BeginMainRenderPass(cmd);
+
     s_frameActive = true;
     s_vertexOffset = 0;
     s_indexOffset = 0;
@@ -642,6 +949,10 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     s_curIdx    = s_indexMapped[s_frameIndex];
     s_curVertBuf = s_vertexBuffer[s_frameIndex];
     s_curIdxBuf  = s_indexBuffer[s_frameIndex];
+
+    // Bind shadow descriptor set (set 2) once for entire main pass
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            s_pipelineLayout, 2, 1, &s_shadowDescSet[s_frameIndex], 0, nullptr);
 
     VkExtent2D ext = GVulkan_GetSwapExtent();
     VkViewport vp = {};
@@ -661,11 +972,16 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
 void EndFrame() {
     if (!s_frameActive) return;
 
+    DrawShadowDebugOverlay(s_cmdBufs[s_frameIndex]);
+
     ImGuiManager::Render(s_cmdBufs[s_frameIndex]);
 
     s_frameActive = false;
     GVulkan_EndFrame(s_cmdBufs[s_frameIndex]);
     s_frameIndex = (s_frameIndex + 1) % MAX_FRAMES;
+
+    std::swap(s_recordedDraws, s_shadowDraws);
+    s_recordedDraws.clear();
 }
 
 void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
@@ -972,6 +1288,13 @@ static GVertex ConvertVertex(const unsigned char* ptr, DWORD fvf) {
         v.v2 = (nf >= 2) ? *(float*)(ptr + off + 4) : 0.0f;
     }
 
+    if (!isRHW) {
+        float sx = v.x, sy = v.y, sz = v.z;
+        v.wx = s_worldMatrix[0]*sx + s_worldMatrix[4]*sy + s_worldMatrix[8]*sz  + s_worldMatrix[12];
+        v.wy = s_worldMatrix[1]*sx + s_worldMatrix[5]*sy + s_worldMatrix[9]*sz  + s_worldMatrix[13];
+        v.wz = s_worldMatrix[2]*sx + s_worldMatrix[6]*sy + s_worldMatrix[10]*sz + s_worldMatrix[14];
+    }
+
     return v;
 }
 
@@ -1094,9 +1417,24 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     pc.stage0AlphaOp = s_stage0AlphaOp;
     pc.stage0AlphaArgs = (s_stage0AlphaArg2 << 16) | s_stage0AlphaArg1;
     pc.textureFactor = s_textureFactor;
+    if (isRHW) pc.flags |= 32u;
     if (!isRHW && s_timeCycle.IsEnabled()) {
         pc.flags |= 16u;
         pc.timecycleColor = s_timeCycle.GetPackedColor();
+    }
+
+    // Record non-RHW draws for shadow pass replay next frame
+    if (!isRHW && s_shadowEnabled) {
+        RecordedDraw rd = {};
+        rd.vertexOffset = vertStart;
+        rd.vertexCount  = (idxCount2 > 0) ? 0 : vertCount;
+        rd.indexOffset   = idxStart;
+        rd.indexCount    = idxCount2;
+        memcpy(rd.worldMatrix, s_worldMatrix, 64);
+        rd.texDescSet = s_boundTexture ? s_boundTexture->descSet : VK_NULL_HANDLE;
+        rd.alphaTest  = s_alphaTestEnabled;
+        rd.alphaRef   = s_alphaRef / 255.0f;
+        s_recordedDraws.push_back(rd);
     }
 
     PipelineKey key = {};
@@ -1169,6 +1507,10 @@ void DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices, DWORD
 void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
                           DWORD vertexCount, const WORD* indices, DWORD indexCount) {
     EmitDrawCall(type, fvf, vertices, vertexCount, indices, indexCount);
+}
+
+void ToggleShadowDebug() {
+    s_debugShadowMaps = !s_debugShadowMaps;
 }
 
 } // namespace VkRenderer

@@ -30,6 +30,7 @@ uint32_t          GVulkan_GetGraphicsFamily();
 VkFormat          GVulkan_GetDepthFormat();
 
 bool GVulkan_BeginFrame(VkCommandBuffer cmd);
+void GVulkan_BeginMainRenderPass(VkCommandBuffer cmd);
 void GVulkan_EndFrame(VkCommandBuffer cmd);
 bool GVulkan_NeedsSwapchainRecreate();
 void GVulkan_RecreateSwapchain();

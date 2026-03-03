@@ -19,10 +19,12 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in uint inColor;
 layout(location = 2) in vec2 inTexCoord;
 layout(location = 3) in vec2 inTexCoord2;
+layout(location = 4) in vec3 inWorldPos;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec2 fragTexCoord;
 layout(location = 2) out vec2 fragTexCoord2;
+layout(location = 3) out vec3 fragWorldPos;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
@@ -34,4 +36,5 @@ void main() {
     );
     fragTexCoord = inTexCoord;
     fragTexCoord2 = inTexCoord2;
+    fragWorldPos = inWorldPos;
 }

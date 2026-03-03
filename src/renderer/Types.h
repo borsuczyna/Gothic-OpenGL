@@ -11,6 +11,7 @@ struct GVertex {
     uint32_t color = 0;
     float    u = 0, v = 0;
     float    u2 = 0, v2 = 0;
+    float    wx = 0, wy = 0, wz = 0;
 };
 
 struct PushConstants {
@@ -48,6 +49,23 @@ struct PipelineKeyHash {
         memcpy(&v, &k, sizeof(v));
         return std::hash<uint64_t>()(v);
     }
+};
+
+struct ShadowConfig {
+    uint32_t resolution       = 2048;
+    int      cascadeCount     = 2;
+    float    shadowRange      = 15000.0f;
+    float    depthBiasConstant = 4.0f;
+    float    depthBiasSlope    = 1.5f;
+    float    shadowStrength   = 0.5f;
+};
+
+struct ShadowUBO {
+    float cascadeVP[2][16];
+    float cascadeSplits[4];
+    float shadowStrength;
+    float shadowEnabled;
+    float pad[2];
 };
 
 } // namespace gvlk

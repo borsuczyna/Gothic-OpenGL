@@ -18,9 +18,20 @@ layout(push_constant) uniform PushConstants {
 layout(set = 0, binding = 0) uniform sampler2D texSampler;
 layout(set = 1, binding = 0) uniform sampler2D texSampler2;
 
+layout(set = 2, binding = 0) uniform sampler2D shadowMap0;
+layout(set = 2, binding = 1) uniform sampler2D shadowMap1;
+layout(set = 2, binding = 2) uniform ShadowData {
+    mat4  cascadeVP[2];
+    vec4  cascadeSplits;
+    float shadowStrength;
+    float shadowEnabled;
+    vec2  pad;
+} shadow;
+
 layout(location = 0) in vec4 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec2 fragTexCoord2;
+layout(location = 3) in vec3 fragWorldPos;
 
 layout(location = 0) out vec4 outColor;
 
@@ -56,6 +67,32 @@ vec4 runStage(uint op, uint args, vec4 current, vec4 diffuse, vec4 texColor, vec
     if (op == 15u) return a1 + a2 * (1.0 - texColor.a);                        // BLENDTEXTUREALPHAPM
     if (op == 16u) return a1 * current.a + a2 * (1.0 - current.a);             // BLENDCURRENTALPHA
     return a1 * a2;
+}
+
+float calcShadow(vec3 worldPos) {
+    if (shadow.shadowEnabled < 0.5) return 1.0;
+
+    for (int i = 0; i < 2; i++) {
+        vec4 shadowClip = shadow.cascadeVP[i] * vec4(worldPos, 1.0);
+        vec3 shadowNDC = shadowClip.xyz / shadowClip.w;
+        vec2 shadowUV = shadowNDC.xy * 0.5 + 0.5;
+
+        if (shadowUV.x >= 0.0 && shadowUV.x <= 1.0 &&
+            shadowUV.y >= 0.0 && shadowUV.y <= 1.0 &&
+            shadowNDC.z >= 0.0 && shadowNDC.z <= 1.0) {
+
+            float shadowDepth;
+            if (i == 0)
+                shadowDepth = texture(shadowMap0, shadowUV).r;
+            else
+                shadowDepth = texture(shadowMap1, shadowUV).r;
+
+            float bias = 0.005;
+            return (shadowNDC.z - bias > shadowDepth) ? shadow.shadowStrength : 1.0;
+        }
+    }
+
+    return 1.0;
 }
 
 void main() {
@@ -111,5 +148,12 @@ void main() {
     if ((pc.flags & 2u) != 0u) {
         if (color.a < pc.alphaRef) discard;
     }
+
+    // Shadow: only for 3D geometry (bit 5 = 32 marks 2D/RHW draws)
+    if ((pc.flags & 32u) == 0u) {
+        float shadowFactor = calcShadow(fragWorldPos);
+        color.rgb *= shadowFactor;
+    }
+
     outColor = color;
 }
