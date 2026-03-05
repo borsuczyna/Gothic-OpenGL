@@ -928,44 +928,85 @@ static DWORD CalcFVFStride(DWORD fvf) {
     return stride;
 }
 
+/* ── Gothic FVF defines (matching GD3D11/MyDirect3DDevice7.h) ────────── */
+#define GOTHIC_FVF_XYZ_DIF_T1         (D3DFVF_XYZ    | D3DFVF_DIFFUSE  | D3DFVF_TEX1)
+#define GOTHIC_FVF_XYZ_NRM_T1         (D3DFVF_XYZ    | D3DFVF_NORMAL   | D3DFVF_TEX1)
+#define GOTHIC_FVF_XYZ_DIF_T2         (D3DFVF_XYZ    | D3DFVF_DIFFUSE  | D3DFVF_TEX2)
+#define GOTHIC_FVF_XYZ_NRM_DIF_T2     (D3DFVF_XYZ    | D3DFVF_NORMAL   | D3DFVF_DIFFUSE | D3DFVF_TEX2)
+#define GOTHIC_FVF_XYZRHW_DIF_T1      (D3DFVF_XYZRHW | D3DFVF_DIFFUSE  | D3DFVF_TEX1)
+#define GOTHIC_FVF_XYZRHW_DIF_SPEC_T1 (D3DFVF_XYZRHW | D3DFVF_DIFFUSE  | D3DFVF_SPECULAR | D3DFVF_TEX1)
+
+/** Convert FVF vertex data to GVertex, matching GD3D11's DrawPrimitive conversion.
+ *  For XYZRHW vertices, RHW is stored in Normal.x (same as GD3D11 stores in ExVertexStruct.Normal.x).
+ *  For typed FVF combos we use the same typed structs as GD3D11 (Gothic_XYZRHW_DIF_T1_Vertex etc.).
+ *  Unknown FVF combos fall through to generic field-by-field parsing. */
 static GVertex ConvertVertex(const unsigned char* ptr, DWORD fvf) {
     GVertex v = {};
+
+    // ── Fast paths for known Gothic FVF types (matching GD3D11) ──────
+    switch (fvf) {
+    case GOTHIC_FVF_XYZRHW_DIF_T1: {
+        auto* src = reinterpret_cast<const Gothic_XYZRHW_DIF_T1_Vertex*>(ptr);
+        v.px = src->x;  v.py = src->y;  v.pz = src->z;
+        v.nx = src->rhw; // RHW stored in Normal.x — same as GD3D11
+        v.color = src->color;
+        v.u = src->u;  v.v = src->v;
+        return v;
+    }
+    case GOTHIC_FVF_XYZRHW_DIF_SPEC_T1: {
+        auto* src = reinterpret_cast<const Gothic_XYZRHW_DIF_SPEC_T1_Vertex*>(ptr);
+        v.px = src->x;  v.py = src->y;  v.pz = src->z;
+        v.nx = src->rhw; // RHW stored in Normal.x — same as GD3D11
+        v.color = src->color;
+        v.u = src->u;  v.v = src->v;
+        return v;
+    }
+    case GOTHIC_FVF_XYZ_DIF_T1: {
+        auto* src = reinterpret_cast<const Gothic_XYZ_DIF_T1_Vertex*>(ptr);
+        v.px = src->x;  v.py = src->y;  v.pz = src->z;
+        v.color = src->color;
+        v.u = src->u;  v.v = src->v;
+        return v;
+    }
+    case GOTHIC_FVF_XYZ_NRM_T1: {
+        auto* src = reinterpret_cast<const Gothic_XYZ_NRM_T1_Vertex*>(ptr);
+        v.px = src->x;   v.py = src->y;   v.pz = src->z;
+        v.nx = src->nx;  v.ny = src->ny;  v.nz = src->nz;
+        v.u = src->u;  v.v = src->v;
+        return v;
+    }
+    case GOTHIC_FVF_XYZ_DIF_T2: {
+        auto* src = reinterpret_cast<const Gothic_XYZ_DIF_T2_Vertex*>(ptr);
+        v.px = src->x;  v.py = src->y;  v.pz = src->z;
+        v.color = src->color;
+        v.u = src->u;    v.v = src->v;
+        v.u2 = src->u2;  v.v2 = src->v2;
+        return v;
+    }
+    case GOTHIC_FVF_XYZ_NRM_DIF_T2: {
+        auto* src = reinterpret_cast<const Gothic_XYZ_NRM_DIF_T2_Vertex*>(ptr);
+        v.px = src->x;   v.py = src->y;   v.pz = src->z;
+        v.nx = src->nx;  v.ny = src->ny;  v.nz = src->nz;
+        v.color = src->color;
+        v.u = src->u;    v.v = src->v;
+        v.u2 = src->u2;  v.v2 = src->v2;
+        return v;
+    }
+    default:
+        break;
+    }
+
+    // ── Generic FVF parsing for unknown combos ───────────────────────
     DWORD off = 0;
 
-    v.x = *(float*)(ptr + off); off += 4;
-    v.y = *(float*)(ptr + off); off += 4;
-    v.z = *(float*)(ptr + off); off += 4;
-    v.w = 1.0f; // Default for 3D geometry
+    v.px = *(float*)(ptr + off); off += 4;
+    v.py = *(float*)(ptr + off); off += 4;
+    v.pz = *(float*)(ptr + off); off += 4;
 
     bool isRHW = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
     if (isRHW) {
-        float rhw = *(float*)(ptr + off); off += 4;
-
-        // Match GD3D11's TransformXYZRHW: convert viewport coords to clip space
-        // preserving W for perspective-correct interpolation.
-        // XYZRHW coordinates are in D3D screen pixel space.
-        // Convert to Vulkan NDC using the current D3D viewport.
-        float vpX = (float)s_vpX;
-        float vpY = (float)s_vpY;
-        float vpW = (float)s_vpW;
-        float vpH = (float)s_vpH;
-        if (vpW < 1.0f) vpW = 1.0f;
-        if (vpH < 1.0f) vpH = 1.0f;
-
-        float ndc_x = ((2.0f * (v.x - vpX)) / vpW) - 1.0f;
-        // Vulkan NDC: Y=-1 at top (matches D3D screen space Y=0 at top)
-        float ndc_y = ((2.0f * (v.y - vpY)) / vpH) - 1.0f;
-        float ndc_z = v.z; // Already in [0,1]
-
-        // Reconstruct W from RHW (reciprocal homogeneous W)
-        // Same as GD3D11: actualW = 1.0f / rhw
-        float actualW = (rhw > 0.0f) ? (1.0f / rhw) : 1.0f;
-
-        // Store clip-space coordinates (pre-perspective-divide)
-        v.x = ndc_x * actualW;
-        v.y = ndc_y * actualW;
-        v.z = ndc_z * actualW;
-        v.w = actualW;
+        v.nx = *(float*)(ptr + off); // Store RHW in Normal.x (matching GD3D11)
+        off += 4;
     }
 
     int extraFloats = 0;
@@ -978,12 +1019,14 @@ static GVertex ConvertVertex(const unsigned char* ptr, DWORD fvf) {
     }
     off += extraFloats * 4;
 
-    if (fvf & D3DFVF_NORMAL) off += 12;
+    if (fvf & D3DFVF_NORMAL) {
+        v.nx = *(float*)(ptr + off); off += 4;
+        v.ny = *(float*)(ptr + off); off += 4;
+        v.nz = *(float*)(ptr + off); off += 4;
+    }
 
     if (fvf & D3DFVF_DIFFUSE) {
         v.color = *(DWORD*)(ptr + off); off += 4;
-    } else {
-        v.color = 0xFFFFFFFF;
     }
 
     if (fvf & D3DFVF_SPECULAR) off += 4;
@@ -1038,8 +1081,8 @@ static void ConvertFanToList(const unsigned char* srcVerts, DWORD fvf, DWORD str
 
 static void ComputeMVP(float* mvp, bool isRHW) {
     if (isRHW) {
-        // XYZRHW vertices are already converted to clip space in ConvertVertex
-        // (matching GD3D11's TransformXYZRHW approach), so use identity matrix
+        // XYZRHW: the vertex shader does TransformXYZRHW (matching GD3D11's
+        // VS_TransformedEx.hlsl), so we pass identity as the MVP.
         MakeIdentity(mvp);
     } else {
         float wvp[16], tmp[16];
@@ -1137,6 +1180,7 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     if (s_alphaTestEnabled) pc.flags |= 2;
     if (s_boundTexture2 && s_stage1ColorOp > 1) pc.flags |= 4;
     if (s_boundTexture && s_boundTexture->hasAlpha) pc.flags |= 8;
+    if (isRHW) pc.flags |= 32; // bit 5 = isRHW — shader uses TransformXYZRHW
     pc.alphaRef = s_alphaRef / 255.0f;
     pc.stage0ColorOp = s_stage0ColorOp;
     pc.stage1ColorOp = s_stage1ColorOp;
@@ -1149,6 +1193,19 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     if (!isRHW && s_timeCycle.IsEnabled()) {
         pc.flags |= 16u;
         pc.timecycleColor = s_timeCycle.GetPackedColor();
+    }
+    // Viewport info for TransformXYZRHW (matching GD3D11's BindViewportInformation
+    // which reads the D3D11 viewport = full rendering resolution, not the D3D7 sub-viewport)
+    if (isRHW) {
+        pc.vpPos[0]  = 0.0f;
+        pc.vpPos[1]  = 0.0f;
+        pc.vpSize[0] = (float)s_gameW;
+        pc.vpSize[1] = (float)s_gameH;
+    } else {
+        pc.vpPos[0]  = (float)s_vpX;
+        pc.vpPos[1]  = (float)s_vpY;
+        pc.vpSize[0] = (float)s_vpW;
+        pc.vpSize[1] = (float)s_vpH;
     }
 
     PipelineKey key = {};
@@ -1180,20 +1237,28 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     VkViewport vp = {};
     VkRect2D scissor = {};
 
-    // Both RHW and non-RHW use the same viewport scaling (matching GD3D11).
-    // XYZRHW vertices are already converted to clip space in ConvertVertex
-    // using the D3D viewport, so the Vulkan viewport maps NDC back to
-    // window pixels at the correct scale.
-    float sx = (float)ext.width / (float)s_gameW;
-    float sy = (float)ext.height / (float)s_gameH;
-    vp.x = s_vpX * sx;
-    vp.y = s_vpY * sy;
-    vp.width = s_vpW * sx;
-    vp.height = s_vpH * sy;
-    vp.minDepth = 0.0f;
-    vp.maxDepth = 1.0f;
-    scissor.offset = { (int32_t)vp.x, (int32_t)vp.y };
-    scissor.extent = { (uint32_t)vp.width, (uint32_t)vp.height };
+    if (isRHW) {
+        // TransformXYZRHW in the shader converts viewport coords → NDC,
+        // so use the full swapchain extent (matching GD3D11's DrawVertexArray)
+        vp.x = 0; vp.y = 0;
+        vp.width  = (float)ext.width;
+        vp.height = (float)ext.height;
+        vp.minDepth = 0.0f;
+        vp.maxDepth = 1.0f;
+        scissor.extent = ext;
+    } else {
+        // Scale the D3D game viewport to the Vulkan swapchain
+        float sx = (float)ext.width  / (float)s_gameW;
+        float sy = (float)ext.height / (float)s_gameH;
+        vp.x = s_vpX * sx;
+        vp.y = s_vpY * sy;
+        vp.width  = s_vpW * sx;
+        vp.height = s_vpH * sy;
+        vp.minDepth = 0.0f;
+        vp.maxDepth = 1.0f;
+        scissor.offset = { (int32_t)vp.x, (int32_t)vp.y };
+        scissor.extent = { (uint32_t)vp.width, (uint32_t)vp.height };
+    }
     vkCmdSetViewport(s_cmdBufs[s_frameIndex], 0, 1, &vp);
     vkCmdSetScissor(s_cmdBufs[s_frameIndex], 0, 1, &scissor);
 

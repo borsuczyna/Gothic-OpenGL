@@ -6,17 +6,67 @@
 
 namespace gvlk {
 
+/* ── Vertex structs matching GD3D11/VertexTypes.h ─────────────────────── */
+
+/** We pack most of Gothic's FVF-formats into this vertex-struct (same as GD3D11's ExVertexStruct) */
 struct GVertex {
-    float    x = 0, y = 0, z = 0;
-    float    w = 1.0f;   // 1.0 for 3D geometry, reconstructed W for XYZRHW
-    uint32_t color = 0;
-    float    u = 0, v = 0;
-    float    u2 = 0, v2 = 0;
+    float    px = 0, py = 0, pz = 0;   // Position  (float3)
+    float    nx = 0, ny = 0, nz = 0;   // Normal    (float3)  — nx stores RHW for XYZRHW verts
+    float    u  = 0, v  = 0;           // TexCoord  (float2)
+    float    u2 = 0, v2 = 0;           // TexCoord2 (float2)
+    uint32_t color = 0xFFFFFFFF;        // D3DCOLOR  (ARGB packed DWORD)
 };
+
+/* ── Gothic FVF typed vertex structs (matching GD3D11) ────────────────── */
+
+struct Gothic_XYZ_DIF_T1_Vertex {
+    float    x, y, z;
+    uint32_t color;
+    float    u, v;
+};
+
+struct Gothic_XYZ_NRM_T1_Vertex {
+    float x, y, z;
+    float nx, ny, nz;
+    float u, v;
+};
+
+struct Gothic_XYZ_DIF_T2_Vertex {
+    float    x, y, z;
+    uint32_t color;
+    float    u, v;
+    float    u2, v2;
+};
+
+struct Gothic_XYZ_NRM_DIF_T2_Vertex {
+    float    x, y, z;
+    float    nx, ny, nz;
+    uint32_t color;
+    float    u, v;
+    float    u2, v2;
+};
+
+struct Gothic_XYZRHW_DIF_T1_Vertex {
+    float    x, y, z;
+    float    rhw;
+    uint32_t color;
+    float    u, v;
+};
+
+struct Gothic_XYZRHW_DIF_SPEC_T1_Vertex {
+    float    x, y, z;
+    float    rhw;
+    uint32_t color;
+    uint32_t specular;
+    float    u, v;
+};
+
+/* ── Push constants ───────────────────────────────────────────────────── */
 
 struct PushConstants {
     float    mvp[16] = {};
-    uint32_t flags = 0;
+    uint32_t flags = 0;              // bit0=hasTex0, bit1=alphaTest, bit2=hasTex1,
+                                     // bit3=texHasAlpha, bit4=timecycle, bit5=isRHW
     float    alphaRef = 0;
     uint32_t stage0ColorOp = 0;
     uint32_t stage1ColorOp = 0;
@@ -27,7 +77,10 @@ struct PushConstants {
     uint32_t stage0AlphaArgs = (1u << 16) | 2u;
     uint32_t textureFactor = 0xFFFFFFFF;
     uint32_t timecycleColor = 0xFFFFFFFF;
+    float    vpPos[2] = {};          // Viewport position (for TransformXYZRHW)
+    float    vpSize[2] = {};         // Viewport size     (for TransformXYZRHW)
 };
+// Total: 64 + 11*4 + 2*4 + 2*4 = 124 bytes  (within 128-byte push constant limit)
 
 struct PipelineKey {
     uint8_t blendEnabled = 0;

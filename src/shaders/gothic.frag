@@ -13,6 +13,11 @@ layout(push_constant) uniform PushConstants {
     uint stage0AlphaArgs; // low 16 = alphaArg1, high 16 = alphaArg2
     uint textureFactor;   // packed ARGB
     uint timecycleColor;  // packed ARGB, replaces diffuse for world geometry
+    // Individual floats to match C++ layout (avoid vec2 alignment padding)
+    float vpPosX;
+    float vpPosY;
+    float vpSizeW;
+    float vpSizeH;
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D texSampler;
