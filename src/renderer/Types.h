@@ -8,6 +8,7 @@ namespace gvlk {
 
 struct GVertex {
     float    x = 0, y = 0, z = 0;
+    float    w = 1.0f;   // 1.0 for 3D geometry, reconstructed W for XYZRHW
     uint32_t color = 0;
     float    u = 0, v = 0;
     float    u2 = 0, v2 = 0;

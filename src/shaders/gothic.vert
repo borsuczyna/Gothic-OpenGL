@@ -15,7 +15,7 @@ layout(push_constant) uniform PushConstants {
     uint timecycleColor;
 } pc;
 
-layout(location = 0) in vec3 inPosition;
+layout(location = 0) in vec4 inPosition;
 layout(location = 1) in uint inColor;
 layout(location = 2) in vec2 inTexCoord;
 layout(location = 3) in vec2 inTexCoord2;
@@ -25,7 +25,9 @@ layout(location = 1) out vec2 fragTexCoord;
 layout(location = 2) out vec2 fragTexCoord2;
 
 void main() {
-    gl_Position = pc.mvp * vec4(inPosition, 1.0);
+    // inPosition.w = 1.0 for 3D geometry (standard transform)
+    // inPosition.w = reconstructed W for XYZRHW (pre-transformed, MVP is identity)
+    gl_Position = pc.mvp * inPosition;
     fragColor = vec4(
         float((inColor >> 16u) & 0xFFu) / 255.0,
         float((inColor >>  8u) & 0xFFu) / 255.0,

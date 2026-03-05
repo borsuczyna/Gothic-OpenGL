@@ -935,9 +935,38 @@ static GVertex ConvertVertex(const unsigned char* ptr, DWORD fvf) {
     v.x = *(float*)(ptr + off); off += 4;
     v.y = *(float*)(ptr + off); off += 4;
     v.z = *(float*)(ptr + off); off += 4;
+    v.w = 1.0f; // Default for 3D geometry
 
     bool isRHW = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
-    if (isRHW) off += 4;
+    if (isRHW) {
+        float rhw = *(float*)(ptr + off); off += 4;
+
+        // Match GD3D11's TransformXYZRHW: convert viewport coords to clip space
+        // preserving W for perspective-correct interpolation.
+        // XYZRHW coordinates are in D3D screen pixel space.
+        // Convert to Vulkan NDC using the current D3D viewport.
+        float vpX = (float)s_vpX;
+        float vpY = (float)s_vpY;
+        float vpW = (float)s_vpW;
+        float vpH = (float)s_vpH;
+        if (vpW < 1.0f) vpW = 1.0f;
+        if (vpH < 1.0f) vpH = 1.0f;
+
+        float ndc_x = ((2.0f * (v.x - vpX)) / vpW) - 1.0f;
+        // Vulkan NDC: Y=-1 at top (matches D3D screen space Y=0 at top)
+        float ndc_y = ((2.0f * (v.y - vpY)) / vpH) - 1.0f;
+        float ndc_z = v.z; // Already in [0,1]
+
+        // Reconstruct W from RHW (reciprocal homogeneous W)
+        // Same as GD3D11: actualW = 1.0f / rhw
+        float actualW = (rhw > 0.0f) ? (1.0f / rhw) : 1.0f;
+
+        // Store clip-space coordinates (pre-perspective-divide)
+        v.x = ndc_x * actualW;
+        v.y = ndc_y * actualW;
+        v.z = ndc_z * actualW;
+        v.w = actualW;
+    }
 
     int extraFloats = 0;
     switch (fvf & D3DFVF_POSITION_MASK) {
@@ -1009,19 +1038,9 @@ static void ConvertFanToList(const unsigned char* srcVerts, DWORD fvf, DWORD str
 
 static void ComputeMVP(float* mvp, bool isRHW) {
     if (isRHW) {
-        // Map game screen coords directly to Vulkan NDC (column-major)
-        // x: [0, gameW] -> [-1, 1], y: [0, gameH] -> [-1, 1]
-        // Vulkan NDC y=-1 is top, which matches D3D screen coords y=0 at top
-        float gw = (float)s_gameW;
-        float gh = (float)s_gameH;
-
-        memset(mvp, 0, 64);
-        mvp[0]  =  2.0f / gw;  // col0.x
-        mvp[5]  =  2.0f / gh;  // col1.y
-        mvp[10] =  1.0f;       // col2.z
-        mvp[12] = -1.0f;       // col3.x
-        mvp[13] = -1.0f;       // col3.y
-        mvp[15] =  1.0f;       // col3.w
+        // XYZRHW vertices are already converted to clip space in ConvertVertex
+        // (matching GD3D11's TransformXYZRHW approach), so use identity matrix
+        MakeIdentity(mvp);
     } else {
         float wvp[16], tmp[16];
 
@@ -1041,6 +1060,35 @@ static void ComputeMVP(float* mvp, bool isRHW) {
     }
 }
 
+// Convert triangle strip to triangle list (like ConvertFanToList but for strips)
+static void ConvertStripToList(const unsigned char* srcVerts, DWORD fvf, DWORD stride,
+                               DWORD count, uint32_t& outVertStart, uint32_t& outVertCount) {
+    if (count < 3 || s_vertexOffset + (count - 2) * 3 > MAX_VERTICES) {
+        outVertCount = 0;
+        return;
+    }
+
+    outVertStart = s_vertexOffset;
+    outVertCount = 0;
+
+    for (DWORD i = 0; i + 2 < count; i++) {
+        GVertex v0 = ConvertVertex(srcVerts + i * stride, fvf);
+        GVertex v1 = ConvertVertex(srcVerts + (i + 1) * stride, fvf);
+        GVertex v2 = ConvertVertex(srcVerts + (i + 2) * stride, fvf);
+        // Alternate winding for even/odd triangles (strip convention)
+        if (i & 1) {
+            s_curVerts[s_vertexOffset++] = v0;
+            s_curVerts[s_vertexOffset++] = v2;
+            s_curVerts[s_vertexOffset++] = v1;
+        } else {
+            s_curVerts[s_vertexOffset++] = v0;
+            s_curVerts[s_vertexOffset++] = v1;
+            s_curVerts[s_vertexOffset++] = v2;
+        }
+        outVertCount += 3;
+    }
+}
+
 static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
                          DWORD count, const WORD* indices, DWORD indexCount) {
     if (!s_frameActive || count == 0) return;
@@ -1050,11 +1098,12 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     const unsigned char* src = (const unsigned char*)vertices;
 
     bool isFan = (type == D3DPT_TRIANGLEFAN);
+    bool isStrip = (type == D3DPT_TRIANGLESTRIP);
 
     uint32_t vertStart, vertCount;
     uint32_t idxStart = 0, idxCount2 = 0;
 
-    if (indices && indexCount > 0 && !isFan) {
+    if (indices && indexCount > 0 && !isFan && !isStrip) {
         vertStart = s_vertexOffset;
         vertCount = count;
         if (s_vertexOffset + count > MAX_VERTICES || s_indexOffset + indexCount > MAX_INDICES) return;
@@ -1068,6 +1117,9 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
         s_indexOffset += indexCount;
     } else if (isFan) {
         ConvertFanToList(src, fvf, stride, count, vertStart, vertCount);
+        if (vertCount == 0) return;
+    } else if (isStrip) {
+        ConvertStripToList(src, fvf, stride, count, vertStart, vertCount);
         if (vertCount == 0) return;
     } else {
         vertStart = s_vertexOffset;
@@ -1128,25 +1180,20 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     VkViewport vp = {};
     VkRect2D scissor = {};
 
-    if (isRHW) {
-        vp.x = 0; vp.y = 0;
-        vp.width = (float)ext.width;
-        vp.height = (float)ext.height;
-        vp.minDepth = 0.0f;
-        vp.maxDepth = 1.0f;
-        scissor.extent = ext;
-    } else {
-        float sx = (float)ext.width / (float)s_gameW;
-        float sy = (float)ext.height / (float)s_gameH;
-        vp.x = s_vpX * sx;
-        vp.y = s_vpY * sy;
-        vp.width = s_vpW * sx;
-        vp.height = s_vpH * sy;
-        vp.minDepth = 0.0f;
-        vp.maxDepth = 1.0f;
-        scissor.offset = { (int32_t)vp.x, (int32_t)vp.y };
-        scissor.extent = { (uint32_t)vp.width, (uint32_t)vp.height };
-    }
+    // Both RHW and non-RHW use the same viewport scaling (matching GD3D11).
+    // XYZRHW vertices are already converted to clip space in ConvertVertex
+    // using the D3D viewport, so the Vulkan viewport maps NDC back to
+    // window pixels at the correct scale.
+    float sx = (float)ext.width / (float)s_gameW;
+    float sy = (float)ext.height / (float)s_gameH;
+    vp.x = s_vpX * sx;
+    vp.y = s_vpY * sy;
+    vp.width = s_vpW * sx;
+    vp.height = s_vpH * sy;
+    vp.minDepth = 0.0f;
+    vp.maxDepth = 1.0f;
+    scissor.offset = { (int32_t)vp.x, (int32_t)vp.y };
+    scissor.extent = { (uint32_t)vp.width, (uint32_t)vp.height };
     vkCmdSetViewport(s_cmdBufs[s_frameIndex], 0, 1, &vp);
     vkCmdSetScissor(s_cmdBufs[s_frameIndex], 0, 1, &scissor);
 
