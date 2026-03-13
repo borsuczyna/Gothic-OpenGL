@@ -63,6 +63,7 @@ void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices
                          DWORD vertexCount, const WORD* indices, DWORD indexCount);
 
 void DrawReconstructedWorld();
+void NotifyWorldDraw();
 
 // Getters for current render state (used by ProxyDevice7 to snapshot state for WorldReconstructor)
 DWORD GetStage0ColorOp();

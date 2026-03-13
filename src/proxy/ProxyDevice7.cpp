@@ -275,6 +275,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE ty
     if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
         VkRenderer::DrawPrimitive(type, fvf, verts, count);
     } else {
+        VkRenderer::NotifyWorldDraw();
         VkTexHandle* tex = nullptr;
         if (boundTextures[0]) {
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
@@ -292,6 +293,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVE
     if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
         VkRenderer::DrawIndexedPrimitive(type, fvf, verts, vertCount, indices, idxCount);
     } else {
+        VkRenderer::NotifyWorldDraw();
         VkTexHandle* tex = nullptr;
         if (boundTextures[0]) {
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
@@ -326,6 +328,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE 
     if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
         VkRenderer::DrawPrimitive(type, fvf, verts, numVertices);
     } else {
+        VkRenderer::NotifyWorldDraw();
         VkTexHandle* tex = nullptr;
         if (boundTextures[0]) {
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
@@ -357,6 +360,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITI
     if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
         VkRenderer::DrawIndexedPrimitive(type, fvf, verts, numVertices, indices, idxCount);
     } else {
+        VkRenderer::NotifyWorldDraw();
         VkTexHandle* tex = nullptr;
         if (boundTextures[0]) {
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();

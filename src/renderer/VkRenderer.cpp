@@ -18,6 +18,21 @@ namespace VkRenderer {
 
 static bool s_initialized = false;
 static bool s_frameActive = false;
+
+// Deferred XYZRHW (2D/UI) draws — replayed AFTER 3D world at EndScene
+struct DeferredRHWDraw {
+    VkPipeline    pipeline;
+    PushConstants pc;
+    VkDescriptorSet descSets[2];
+    VkViewport    viewport;
+    VkRect2D      scissor;
+    uint32_t      vertStart;
+    uint32_t      vertCount;
+    uint32_t      idxStart;
+    uint32_t      idxCount;
+};
+static std::vector<DeferredRHWDraw> s_deferredRHW;
+static bool s_hasWorldDraws = false;
 static int  s_windowW = 800, s_windowH = 600;
 static int  s_gameW   = 800, s_gameH   = 600;
 
@@ -638,6 +653,8 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
         return;
 
     s_frameActive = true;
+    s_deferredRHW.clear();
+    s_hasWorldDraws = false;
     s_vertexOffset = 0;
     s_indexOffset = 0;
     s_curVerts  = s_vertexMapped[s_frameIndex];
@@ -1222,26 +1239,16 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     VkPipeline pipeline = GetOrCreatePipeline(key);
     if (pipeline == VK_NULL_HANDLE) return;
 
-    vkCmdBindPipeline(s_cmdBufs[s_frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdPushConstants(s_cmdBufs[s_frameIndex], s_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(PushConstants), &pc);
-
     VkDescriptorSet descSets[2];
     descSets[0] = s_boundTexture ? s_boundTexture->descSet : s_whiteTex.descSet;
     descSets[1] = s_boundTexture2 ? s_boundTexture2->descSet : s_whiteTex.descSet;
-    if (descSets[0] && descSets[1]) {
-        vkCmdBindDescriptorSets(s_cmdBufs[s_frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                s_pipelineLayout, 0, 2, descSets, 0, nullptr);
-    }
+    if (!descSets[0] || !descSets[1]) return;
 
     VkExtent2D ext = GVulkan_GetSwapExtent();
     VkViewport vp = {};
     VkRect2D scissor = {};
 
     if (isRHW) {
-        // TransformXYZRHW in the shader converts viewport coords → NDC,
-        // so use the full swapchain extent (matching GD3D11's DrawVertexArray)
         vp.x = 0; vp.y = 0;
         vp.width  = (float)ext.width;
         vp.height = (float)ext.height;
@@ -1249,7 +1256,6 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
         vp.maxDepth = 1.0f;
         scissor.extent = ext;
     } else {
-        // Scale the D3D game viewport to the Vulkan swapchain
         float sx = (float)ext.width  / (float)s_gameW;
         float sy = (float)ext.height / (float)s_gameH;
         vp.x = s_vpX * sx;
@@ -1261,6 +1267,32 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
         scissor.offset = { (int32_t)vp.x, (int32_t)vp.y };
         scissor.extent = { (uint32_t)vp.width, (uint32_t)vp.height };
     }
+
+    if (isRHW && s_hasWorldDraws) {
+        // Defer XYZRHW draws that come after 3D world — replayed after the 3D world
+        DeferredRHWDraw d;
+        d.pipeline = pipeline;
+        d.pc = pc;
+        d.descSets[0] = descSets[0];
+        d.descSets[1] = descSets[1];
+        d.viewport = vp;
+        d.scissor = scissor;
+        d.vertStart = vertStart;
+        d.vertCount = vertCount;
+        d.idxStart = idxStart;
+        d.idxCount = idxCount2;
+        s_deferredRHW.push_back(d);
+        return;
+    }
+
+    vkCmdBindPipeline(s_cmdBufs[s_frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdPushConstants(s_cmdBufs[s_frameIndex], s_pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(PushConstants), &pc);
+
+    vkCmdBindDescriptorSets(s_cmdBufs[s_frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+
     vkCmdSetViewport(s_cmdBufs[s_frameIndex], 0, 1, &vp);
     vkCmdSetScissor(s_cmdBufs[s_frameIndex], 0, 1, &scissor);
 
@@ -1300,140 +1332,168 @@ static void MakePerspectiveLH(float* out, float fovYRad, float aspect, float zn,
     out[14] = -zn * zf / (zf - zn);
 }
 
+void NotifyWorldDraw() { s_hasWorldDraws = true; }
+
 void DrawReconstructedWorld() {
     if (!s_frameActive) return;
 
-    const auto& worldVerts = WorldReconstructor::GetWorldVertices();
-    const auto& batches    = WorldReconstructor::GetBatches();
-    if (worldVerts.empty() || batches.empty()) return;
-
-    uint32_t totalVerts = (uint32_t)worldVerts.size();
-    if (s_vertexOffset + totalVerts > MAX_VERTICES) {
-        totalVerts = MAX_VERTICES - s_vertexOffset;
-        totalVerts -= totalVerts % 3;
-        if (totalVerts == 0) return;
-    }
-
-    // Upload all world vertices as GVertex (with UVs + UV2)
-    uint32_t uploadStart = s_vertexOffset;
-    for (uint32_t i = 0; i < totalVerts; i++) {
-        GVertex gv = {};
-        gv.px = worldVerts[i].x;
-        gv.py = worldVerts[i].y;
-        gv.pz = worldVerts[i].z;
-        gv.u  = worldVerts[i].u;
-        gv.v  = worldVerts[i].v;
-        gv.u2 = worldVerts[i].u2;
-        gv.v2 = worldVerts[i].v2;
-        gv.color = worldVerts[i].color;
-        s_curVerts[s_vertexOffset++] = gv;
-    }
-
-    // Build VP = View * Gothic's projection (matches Gothic's BSP/portal culling frustum)
-    float vp[16];
-    MatMul(vp, s_viewMatrix, s_projMatrix);
-
-    // Flip Y for Vulkan NDC
-    vp[1]  = -vp[1];
-    vp[5]  = -vp[5];
-    vp[9]  = -vp[9];
-    vp[13] = -vp[13];
-
     VkCommandBuffer cmd = s_cmdBufs[s_frameIndex];
 
-    // Bind vertex buffer (all vertices are contiguous)
-    VkDeviceSize vbOffset = uploadStart * sizeof(GVertex);
-    vkCmdBindVertexBuffers(cmd, 0, 1, &s_curVertBuf, &vbOffset);
+    const auto& worldVerts = WorldReconstructor::GetWorldVertices();
+    const auto& batches    = WorldReconstructor::GetBatches();
+    if (!worldVerts.empty() && !batches.empty()) {
 
-    VkPipeline lastPipeline = VK_NULL_HANDLE;
+        uint32_t totalVerts = (uint32_t)worldVerts.size();
+        if (s_vertexOffset + totalVerts > MAX_VERTICES) {
+            totalVerts = MAX_VERTICES - s_vertexOffset;
+            totalVerts -= totalVerts % 3;
+        }
+        if (totalVerts > 0) {
 
-    // Compute viewport scaling (matching EmitDrawCall for 3D draws)
-    VkExtent2D ext = GVulkan_GetSwapExtent();
-    float sx = (float)ext.width  / (float)s_gameW;
-    float sy = (float)ext.height / (float)s_gameH;
-
-    // Draw each batch with its own texture and full render state
-    for (const auto& batch : batches) {
-        // Skip batches that exceed what we uploaded
-        if (batch.startVertex + batch.vertexCount > totalVerts) break;
-
-        const auto& rs = batch.rs;
-
-        // Per-batch pipeline based on blend/alpha/depth state
-        PipelineKey key = {};
-        key.depthTestEnabled = 1;
-        key.depthWriteEnabled = rs.depthWriteEnabled ? 1 : 0;
-        key.depthFunc = (uint8_t)D3DCMP_LESSEQUAL;
-        key.blendEnabled = rs.blendEnabled ? 1 : 0;
-        key.srcBlend = rs.srcBlend;
-        key.dstBlend = rs.dstBlend;
-
-        VkPipeline pipeline = GetOrCreatePipeline(key);
-        if (pipeline == VK_NULL_HANDLE) continue;
-        if (pipeline != lastPipeline) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            lastPipeline = pipeline;
+        // Upload all world vertices as GVertex (with UVs + UV2)
+        uint32_t uploadStart = s_vertexOffset;
+        for (uint32_t i = 0; i < totalVerts; i++) {
+            GVertex gv = {};
+            gv.px = worldVerts[i].x;
+            gv.py = worldVerts[i].y;
+            gv.pz = worldVerts[i].z;
+            gv.u  = worldVerts[i].u;
+            gv.v  = worldVerts[i].v;
+            gv.u2 = worldVerts[i].u2;
+            gv.v2 = worldVerts[i].v2;
+            gv.color = worldVerts[i].color;
+            s_curVerts[s_vertexOffset++] = gv;
         }
 
-        // Build push constants matching EmitDrawCall's logic for 3D draws
-        PushConstants pc = {};
-        memcpy(pc.mvp, vp, 64);
+        // Build VP = View * Gothic's projection (matches Gothic's BSP/portal culling frustum)
+        float vp[16];
+        MatMul(vp, s_viewMatrix, s_projMatrix);
 
-        pc.flags = 0;
-        if (batch.texture)   pc.flags |= 1;  // bit0 = hasTex0
-        if (rs.alphaTestEnabled) pc.flags |= 2;  // bit1 = alphaTest
-        if (rs.texture2 && rs.stage1ColorOp > 1) pc.flags |= 4;  // bit2 = hasTex1
-        if (batch.texture && batch.texture->hasAlpha) pc.flags |= 8;  // bit3 = texHasAlpha
-        if (s_timeCycle.IsEnabled()) {
-            pc.flags |= 16u; // bit4 = timecycle
-            pc.timecycleColor = s_timeCycle.GetPackedColor();
+        // Flip Y for Vulkan NDC
+        vp[1]  = -vp[1];
+        vp[5]  = -vp[5];
+        vp[9]  = -vp[9];
+        vp[13] = -vp[13];
+
+        // Bind vertex buffer (all vertices are contiguous)
+        VkDeviceSize vbOffset = uploadStart * sizeof(GVertex);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &s_curVertBuf, &vbOffset);
+
+        VkPipeline lastPipeline = VK_NULL_HANDLE;
+
+        // Compute viewport scaling (matching EmitDrawCall for 3D draws)
+        VkExtent2D ext = GVulkan_GetSwapExtent();
+        float sx = (float)ext.width  / (float)s_gameW;
+        float sy = (float)ext.height / (float)s_gameH;
+
+        // Draw each batch with its own texture and full render state
+        for (const auto& batch : batches) {
+            // Skip batches that exceed what we uploaded
+            if (batch.startVertex + batch.vertexCount > totalVerts) break;
+
+            const auto& rs = batch.rs;
+
+            // Per-batch pipeline based on blend/alpha/depth state
+            PipelineKey key = {};
+            key.depthTestEnabled = 1;
+            key.depthWriteEnabled = rs.depthWriteEnabled ? 1 : 0;
+            key.depthFunc = (uint8_t)D3DCMP_LESSEQUAL;
+            key.blendEnabled = rs.blendEnabled ? 1 : 0;
+            key.srcBlend = rs.srcBlend;
+            key.dstBlend = rs.dstBlend;
+
+            VkPipeline pipeline = GetOrCreatePipeline(key);
+            if (pipeline == VK_NULL_HANDLE) continue;
+            if (pipeline != lastPipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                lastPipeline = pipeline;
+            }
+
+            // Build push constants matching EmitDrawCall's logic for 3D draws
+            PushConstants pc = {};
+            memcpy(pc.mvp, vp, 64);
+
+            pc.flags = 0;
+            if (batch.texture)   pc.flags |= 1;  // bit0 = hasTex0
+            if (rs.alphaTestEnabled) pc.flags |= 2;  // bit1 = alphaTest
+            if (rs.texture2 && rs.stage1ColorOp > 1) pc.flags |= 4;  // bit2 = hasTex1
+            if (batch.texture && batch.texture->hasAlpha) pc.flags |= 8;  // bit3 = texHasAlpha
+            if (s_timeCycle.IsEnabled()) {
+                pc.flags |= 16u; // bit4 = timecycle
+                pc.timecycleColor = s_timeCycle.GetPackedColor();
+            }
+
+            pc.alphaRef       = rs.alphaRef;
+            pc.stage0ColorOp  = rs.stage0ColorOp;
+            pc.stage1ColorOp  = rs.stage1ColorOp;
+            pc.stage0Args     = (rs.stage0Arg2 << 16) | rs.stage0Arg1;
+            pc.stage1Args     = (rs.stage1Arg2 << 16) | rs.stage1Arg1;
+            pc.texCoordIdx    = (rs.stage1TexCoordIdx << 16) | rs.stage0TexCoordIdx;
+            pc.stage0AlphaOp  = rs.stage0AlphaOp;
+            pc.stage0AlphaArgs = (rs.stage0AlphaArg2 << 16) | rs.stage0AlphaArg1;
+            pc.textureFactor  = rs.textureFactor;
+
+            // Viewport info (matching EmitDrawCall's 3D path)
+            pc.vpPos[0]  = (float)s_vpX;
+            pc.vpPos[1]  = (float)s_vpY;
+            pc.vpSize[0] = (float)s_vpW;
+            pc.vpSize[1] = (float)s_vpH;
+
+            vkCmdPushConstants(cmd, s_pipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(PushConstants), &pc);
+
+            // Bind textures (stage 0 + stage 1)
+            VkDescriptorSet descSets[2];
+            descSets[0] = (batch.texture && batch.texture->descSet)
+                          ? batch.texture->descSet : s_whiteTex.descSet;
+            descSets[1] = (rs.texture2 && rs.texture2->descSet)
+                          ? rs.texture2->descSet : s_whiteTex.descSet;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+
+            // Set viewport scaled to swapchain (matching EmitDrawCall's 3D path)
+            VkViewport viewport = {};
+            viewport.x = s_vpX * sx;
+            viewport.y = s_vpY * sy;
+            viewport.width  = s_vpW * sx;
+            viewport.height = s_vpH * sy;
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+            VkRect2D scissor = {};
+            scissor.offset = { (int32_t)viewport.x, (int32_t)viewport.y };
+            scissor.extent = { (uint32_t)viewport.width, (uint32_t)viewport.height };
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            vkCmdDraw(cmd, batch.vertexCount, 1, batch.startVertex, 0);
         }
 
-        pc.alphaRef       = rs.alphaRef;
-        pc.stage0ColorOp  = rs.stage0ColorOp;
-        pc.stage1ColorOp  = rs.stage1ColorOp;
-        pc.stage0Args     = (rs.stage0Arg2 << 16) | rs.stage0Arg1;
-        pc.stage1Args     = (rs.stage1Arg2 << 16) | rs.stage1Arg1;
-        pc.texCoordIdx    = (rs.stage1TexCoordIdx << 16) | rs.stage0TexCoordIdx;
-        pc.stage0AlphaOp  = rs.stage0AlphaOp;
-        pc.stage0AlphaArgs = (rs.stage0AlphaArg2 << 16) | rs.stage0AlphaArg1;
-        pc.textureFactor  = rs.textureFactor;
+        } // totalVerts > 0
+    } // worldVerts not empty
 
-        // Viewport info (matching EmitDrawCall's 3D path)
-        pc.vpPos[0]  = (float)s_vpX;
-        pc.vpPos[1]  = (float)s_vpY;
-        pc.vpSize[0] = (float)s_vpW;
-        pc.vpSize[1] = (float)s_vpH;
-
+    // Replay deferred XYZRHW (2D/UI) draws on top of the 3D world
+    for (const auto& d : s_deferredRHW) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, d.pipeline);
         vkCmdPushConstants(cmd, s_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(PushConstants), &pc);
-
-        // Bind textures (stage 0 + stage 1)
-        VkDescriptorSet descSets[2];
-        descSets[0] = (batch.texture && batch.texture->descSet)
-                      ? batch.texture->descSet : s_whiteTex.descSet;
-        descSets[1] = (rs.texture2 && rs.texture2->descSet)
-                      ? rs.texture2->descSet : s_whiteTex.descSet;
+                           0, sizeof(PushConstants), &d.pc);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+                                s_pipelineLayout, 0, 2, d.descSets, 0, nullptr);
+        vkCmdSetViewport(cmd, 0, 1, &d.viewport);
+        vkCmdSetScissor(cmd, 0, 1, &d.scissor);
 
-        // Set viewport scaled to swapchain (matching EmitDrawCall's 3D path)
-        VkViewport viewport = {};
-        viewport.x = s_vpX * sx;
-        viewport.y = s_vpY * sy;
-        viewport.width  = s_vpW * sx;
-        viewport.height = s_vpH * sy;
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        VkDeviceSize vbOffset = d.vertStart * sizeof(GVertex);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &s_curVertBuf, &vbOffset);
 
-        VkRect2D scissor = {};
-        scissor.offset = { (int32_t)viewport.x, (int32_t)viewport.y };
-        scissor.extent = { (uint32_t)viewport.width, (uint32_t)viewport.height };
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-        vkCmdDraw(cmd, batch.vertexCount, 1, batch.startVertex, 0);
+        if (d.idxCount > 0) {
+            VkDeviceSize ibOffset = d.idxStart * sizeof(uint16_t);
+            vkCmdBindIndexBuffer(cmd, s_curIdxBuf, ibOffset, VK_INDEX_TYPE_UINT16);
+            vkCmdDrawIndexed(cmd, d.idxCount, 1, 0, 0, 0);
+        } else {
+            vkCmdDraw(cmd, d.vertCount, 1, 0, 0);
+        }
     }
 }
 
