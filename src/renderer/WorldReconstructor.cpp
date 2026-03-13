@@ -122,7 +122,8 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
                      const void* vertices, DWORD vertexCount,
                      const WORD* indices, DWORD indexCount,
                      const float* worldMatrix,
-                     VkTexHandle* texture) {
+                     VkTexHandle* texture,
+                     const BatchRenderState& rs) {
     if (!vertices || vertexCount == 0) return;
 
     // Skip pre-transformed 2D vertices (UI, HUD)
@@ -193,11 +194,27 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
 
     uint32_t emitted = (uint32_t)s_worldVerts.size() - startVert;
     if (emitted > 0) {
-        // Merge with previous batch if same texture
-        if (!s_batches.empty() && s_batches.back().texture == texture) {
+        // Merge with previous batch if same texture and same render state
+        if (!s_batches.empty() &&
+            s_batches.back().texture == texture &&
+            s_batches.back().blendEnabled == rs.blendEnabled &&
+            s_batches.back().srcBlend == rs.srcBlend &&
+            s_batches.back().dstBlend == rs.dstBlend &&
+            s_batches.back().alphaTestEnabled == rs.alphaTestEnabled &&
+            s_batches.back().depthWriteEnabled == rs.depthWriteEnabled) {
             s_batches.back().vertexCount += emitted;
         } else {
-            s_batches.push_back({ texture, startVert, emitted });
+            DrawBatch b;
+            b.texture = texture;
+            b.startVertex = startVert;
+            b.vertexCount = emitted;
+            b.blendEnabled = rs.blendEnabled;
+            b.srcBlend = rs.srcBlend;
+            b.dstBlend = rs.dstBlend;
+            b.alphaTestEnabled = rs.alphaTestEnabled;
+            b.alphaRef = rs.alphaRef;
+            b.depthWriteEnabled = rs.depthWriteEnabled;
+            s_batches.push_back(b);
         }
     }
 }

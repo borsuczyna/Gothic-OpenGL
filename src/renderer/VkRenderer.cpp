@@ -1337,21 +1337,7 @@ void DrawReconstructedWorld() {
     vp[9]  = -vp[9];
     vp[13] = -vp[13];
 
-    // Pipeline: depth test on, depth write on, no blend
-    PipelineKey key = {};
-    key.depthTestEnabled = 1;
-    key.depthWriteEnabled = 1;
-    key.depthFunc = (uint8_t)D3DCMP_LESSEQUAL;
-    key.blendEnabled = 0;
-    key.srcBlend = (uint8_t)D3DBLEND_ONE;
-    key.dstBlend = (uint8_t)D3DBLEND_ZERO;
-
-    VkPipeline pipeline = GetOrCreatePipeline(key);
-    if (pipeline == VK_NULL_HANDLE) return;
-
     VkCommandBuffer cmd = s_cmdBufs[s_frameIndex];
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     // Full swapchain viewport
     VkExtent2D ext = GVulkan_GetSwapExtent();
@@ -1370,27 +1356,48 @@ void DrawReconstructedWorld() {
     VkDeviceSize vbOffset = uploadStart * sizeof(GVertex);
     vkCmdBindVertexBuffers(cmd, 0, 1, &s_curVertBuf, &vbOffset);
 
-    // Draw each batch with its own texture
+    VkPipeline lastPipeline = VK_NULL_HANDLE;
+
+    // Draw each batch with its own texture and render state
     for (const auto& batch : batches) {
         // Skip batches that exceed what we uploaded
         if (batch.startVertex + batch.vertexCount > totalVerts) break;
 
+        // Per-batch pipeline based on blend/alpha/depth state
+        PipelineKey key = {};
+        key.depthTestEnabled = 1;
+        key.depthWriteEnabled = batch.depthWriteEnabled ? 1 : 0;
+        key.depthFunc = (uint8_t)D3DCMP_LESSEQUAL;
+        key.blendEnabled = batch.blendEnabled ? 1 : 0;
+        key.srcBlend = batch.srcBlend;
+        key.dstBlend = batch.dstBlend;
+
+        VkPipeline pipeline = GetOrCreatePipeline(key);
+        if (pipeline == VK_NULL_HANDLE) continue;
+        if (pipeline != lastPipeline) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            lastPipeline = pipeline;
+        }
+
         PushConstants pc = {};
         memcpy(pc.mvp, vp, 64);
-        pc.alphaRef = 0.0f;
 
         VkDescriptorSet tex0Set = s_whiteTex.descSet;
         if (batch.texture && batch.texture->descSet) {
             tex0Set = batch.texture->descSet;
             pc.flags = 1;          // bit0 = hasTex0
+            if (batch.alphaTestEnabled) pc.flags |= 2; // bit1 = alphaTest
+            if (batch.texture->hasAlpha) pc.flags |= 8; // bit3 = texHasAlpha
             pc.stage0ColorOp = 4;  // D3DTOP_MODULATE: texture * diffuse
             pc.stage0Args = (0u << 16) | 2u; // arg1=D3DTA_TEXTURE(2), arg2=D3DTA_DIFFUSE(0)
             pc.stage0AlphaOp = 4;
             pc.stage0AlphaArgs = (0u << 16) | 2u;
         } else {
             pc.flags = 0;
+            if (batch.alphaTestEnabled) pc.flags |= 2;
             pc.stage0ColorOp = 0;  // D3DTOP_DISABLE → uses diffuse
         }
+        pc.alphaRef = batch.alphaRef;
 
         vkCmdPushConstants(cmd, s_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

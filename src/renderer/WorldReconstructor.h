@@ -26,6 +26,22 @@ struct DrawBatch {
     VkTexHandle* texture;
     uint32_t startVertex;
     uint32_t vertexCount;
+    // Render state snapshot
+    bool     blendEnabled;
+    uint8_t  srcBlend;
+    uint8_t  dstBlend;
+    bool     alphaTestEnabled;
+    float    alphaRef;
+    bool     depthWriteEnabled;
+};
+
+struct BatchRenderState {
+    bool     blendEnabled;
+    uint8_t  srcBlend;
+    uint8_t  dstBlend;
+    bool     alphaTestEnabled;
+    float    alphaRef;
+    bool     depthWriteEnabled;
 };
 
 // Call at the start of each frame (BeginScene) to clear accumulated data
@@ -33,12 +49,14 @@ void BeginFrame();
 
 // Call from every draw call to capture vertices and reconstruct world positions.
 // texture is the currently bound VkTexHandle (stage 0), may be nullptr.
+// rs is a snapshot of the current blend/alpha/depth render state.
 void CaptureDrawCall(D3DPRIMITIVETYPE primType,
                      DWORD fvf,
                      const void* vertices, DWORD vertexCount,
                      const WORD* indices, DWORD indexCount,
                      const float* worldMatrix,
-                     VkTexHandle* texture);
+                     VkTexHandle* texture,
+                     const BatchRenderState& rs);
 
 // Call once per frame to print stats
 void PrintIfReady();
