@@ -62,4 +62,6 @@ void DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices, DWORD
 void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
                          DWORD vertexCount, const WORD* indices, DWORD indexCount);
 
+void DrawReconstructedWorld();
+
 } // namespace VkRenderer

@@ -10,69 +10,23 @@ namespace WorldReconstructor {
 // Internal state
 // ---------------------------------------------------------------------------
 static std::vector<WorldVertex> s_worldVerts;
+static std::vector<DrawBatch>   s_batches;
 static ULONGLONG s_lastPrintMs = 0;
-
-// Reserve a reasonable amount to avoid per-frame reallocs
-static constexpr size_t RESERVE_SIZE = 8192;
+static constexpr size_t RESERVE_SIZE = 65536;
 
 // ---------------------------------------------------------------------------
-// 4x4 matrix helpers (row-major, matching D3D7 convention)
+// Transform a point by a row-major 4x4 matrix (D3D row-vector convention)
 // ---------------------------------------------------------------------------
-
-// Multiply two row-major 4x4 matrices: out = A * B
-static void MatMul4x4(float* out, const float* a, const float* b) {
-    for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++) {
-            out[r * 4 + c] = a[r * 4 + 0] * b[0 * 4 + c]
-                           + a[r * 4 + 1] * b[1 * 4 + c]
-                           + a[r * 4 + 2] * b[2 * 4 + c]
-                           + a[r * 4 + 3] * b[3 * 4 + c];
-        }
-    }
-}
-
-// Transform a point by a row-major 4x4 matrix: result = point * M (D3D row-vector convention)
-static WorldVertex TransformPoint(float px, float py, float pz, const float* m) {
-    WorldVertex r;
-    r.x = px * m[0] + py * m[4] + pz * m[8]  + m[12];
-    r.y = px * m[1] + py * m[5] + pz * m[9]  + m[13];
-    r.z = px * m[2] + py * m[6] + pz * m[10] + m[14];
-    return r;
-}
-
-// Invert a 4x4 matrix (general case). Returns false if singular.
-static bool Invert4x4(float* inv, const float* m) {
-    float t[16];
-    t[0]  =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
-    t[4]  = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
-    t[8]  =  m[4]*m[9]*m[15]  - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
-    t[12] = -m[4]*m[9]*m[14]  + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
-    t[1]  = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
-    t[5]  =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
-    t[9]  = -m[0]*m[9]*m[15]  + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
-    t[13] =  m[0]*m[9]*m[14]  - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
-    t[2]  =  m[1]*m[6]*m[15]  - m[1]*m[7]*m[14]  - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7]  - m[13]*m[3]*m[6];
-    t[6]  = -m[0]*m[6]*m[15]  + m[0]*m[7]*m[14]  + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7]  + m[12]*m[3]*m[6];
-    t[10] =  m[0]*m[5]*m[15]  - m[0]*m[7]*m[13]  - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7]  - m[12]*m[3]*m[5];
-    t[14] = -m[0]*m[5]*m[14]  + m[0]*m[6]*m[13]  + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6]  + m[12]*m[2]*m[5];
-    t[3]  = -m[1]*m[6]*m[11]  + m[1]*m[7]*m[10]  + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7]   + m[9]*m[3]*m[6];
-    t[7]  =  m[0]*m[6]*m[11]  - m[0]*m[7]*m[10]  - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7]   - m[8]*m[3]*m[6];
-    t[11] = -m[0]*m[5]*m[11]  + m[0]*m[7]*m[9]   + m[4]*m[1]*m[11] - m[4]*m[3]*m[9]  - m[8]*m[1]*m[7]   + m[8]*m[3]*m[5];
-    t[15] =  m[0]*m[5]*m[10]  - m[0]*m[6]*m[9]   - m[4]*m[1]*m[10] + m[4]*m[2]*m[9]  + m[8]*m[1]*m[6]   - m[8]*m[2]*m[5];
-
-    float det = m[0]*t[0] + m[1]*t[4] + m[2]*t[8] + m[3]*t[12];
-    if (fabsf(det) < 1e-12f) return false;
-
-    float invDet = 1.0f / det;
-    for (int i = 0; i < 16; i++)
-        inv[i] = t[i] * invDet;
-    return true;
+static void TransformPoint(float px, float py, float pz, const float* m,
+                           float& ox, float& oy, float& oz) {
+    ox = px * m[0] + py * m[4] + pz * m[8]  + m[12];
+    oy = px * m[1] + py * m[5] + pz * m[9]  + m[13];
+    oz = px * m[2] + py * m[6] + pz * m[10] + m[14];
 }
 
 // ---------------------------------------------------------------------------
-// FVF stride calculation (same logic as VkRenderer / ProxyDevice7)
+// FVF helpers
 // ---------------------------------------------------------------------------
-
 static DWORD CalcFVFStride(DWORD fvf) {
     DWORD stride = 0;
     switch (fvf & D3DFVF_POSITION_MASK) {
@@ -94,51 +48,62 @@ static DWORD CalcFVFStride(DWORD fvf) {
     return stride;
 }
 
-// ---------------------------------------------------------------------------
-// Extract position (x, y, z) from a raw FVF vertex
-// ---------------------------------------------------------------------------
-
-static void ExtractPosition(const unsigned char* ptr, DWORD fvf,
-                             float& outX, float& outY, float& outZ, float& outRHW) {
-    outX = *(const float*)(ptr + 0);
-    outY = *(const float*)(ptr + 4);
-    outZ = *(const float*)(ptr + 8);
-    outRHW = 1.0f;
-    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW)
-        outRHW = *(const float*)(ptr + 12);
+// Compute byte offset to diffuse color within an FVF vertex
+static DWORD CalcColorOffset(DWORD fvf) {
+    DWORD offset = 0;
+    switch (fvf & D3DFVF_POSITION_MASK) {
+        case D3DFVF_XYZ:    offset = 12; break;
+        case D3DFVF_XYZRHW: offset = 16; break;
+        case D3DFVF_XYZB1:  offset = 16; break;
+        case D3DFVF_XYZB2:  offset = 20; break;
+        case D3DFVF_XYZB3:  offset = 24; break;
+        case D3DFVF_XYZB4:  offset = 28; break;
+        case D3DFVF_XYZB5:  offset = 32; break;
+    }
+    if (fvf & D3DFVF_NORMAL) offset += 12;
+    return offset;
 }
 
-// ---------------------------------------------------------------------------
-// Unproject an XYZRHW screen-space vertex back to world space
-// ---------------------------------------------------------------------------
+// Compute byte offset to first UV set within an FVF vertex
+static DWORD CalcUVOffset(DWORD fvf) {
+    DWORD offset = CalcColorOffset(fvf);
+    if (fvf & D3DFVF_DIFFUSE)  offset += 4;
+    if (fvf & D3DFVF_SPECULAR) offset += 4;
+    return offset;
+}
 
-static WorldVertex UnprojectRHW(float sx, float sy, float sz, float rhw,
-                                 const float* invViewProj,
-                                 const D3DVIEWPORT7& vp) {
-    // Screen → NDC
-    float ndcX = (2.0f * (sx - vp.dwX) / (float)vp.dwWidth) - 1.0f;
-    float ndcY = 1.0f - (2.0f * (sy - vp.dwY) / (float)vp.dwHeight); // D3D Y is top-down
-    float ndcZ = sz; // D3D depth is already 0..1
+// Extract world-space vertex with UV and color from raw FVF data
+static WorldVertex ExtractWorldVertex(const unsigned char* ptr, DWORD fvf,
+                                      const float* worldMatrix) {
+    WorldVertex wv;
+    float px = *(const float*)(ptr + 0);
+    float py = *(const float*)(ptr + 4);
+    float pz = *(const float*)(ptr + 8);
+    TransformPoint(px, py, pz, worldMatrix, wv.x, wv.y, wv.z);
 
-    // NDC → clip (w = 1/rhw for pre-divided vertices)
-    float w = (rhw > 1e-6f) ? (1.0f / rhw) : 1.0f;
-    float clipX = ndcX * w;
-    float clipY = ndcY * w;
-    float clipZ = ndcZ * w;
-    float clipW = w;
-
-    // clip → world via inverse(View*Proj), row-vector convention: [x y z w] * M^-1
-    WorldVertex r;
-    r.x = clipX * invViewProj[0] + clipY * invViewProj[4] + clipZ * invViewProj[8]  + clipW * invViewProj[12];
-    r.y = clipX * invViewProj[1] + clipY * invViewProj[5] + clipZ * invViewProj[9]  + clipW * invViewProj[13];
-    r.z = clipX * invViewProj[2] + clipY * invViewProj[6] + clipZ * invViewProj[10] + clipW * invViewProj[14];
-    float rw = clipX * invViewProj[3] + clipY * invViewProj[7] + clipZ * invViewProj[11] + clipW * invViewProj[15];
-    if (fabsf(rw) > 1e-6f) {
-        r.x /= rw;
-        r.y /= rw;
-        r.z /= rw;
+    if (fvf & D3DFVF_DIFFUSE) {
+        wv.color = *(const uint32_t*)(ptr + CalcColorOffset(fvf));
+    } else {
+        wv.color = 0xFFFFFFFF;
     }
-    return r;
+
+    DWORD texCount = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    if (texCount > 0) {
+        DWORD uvOff = CalcUVOffset(fvf);
+        wv.u = *(const float*)(ptr + uvOff);
+        wv.v = *(const float*)(ptr + uvOff + 4);
+    } else {
+        wv.u = 0.0f;
+        wv.v = 0.0f;
+    }
+    return wv;
+}
+
+// Emit one triangle into the accumulator
+static inline void EmitTriangle(const WorldVertex& a, const WorldVertex& b, const WorldVertex& c) {
+    s_worldVerts.push_back(a);
+    s_worldVerts.push_back(b);
+    s_worldVerts.push_back(c);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,65 +112,92 @@ static WorldVertex UnprojectRHW(float sx, float sy, float sz, float rhw,
 
 void BeginFrame() {
     s_worldVerts.clear();
+    s_batches.clear();
     if (s_worldVerts.capacity() < RESERVE_SIZE)
         s_worldVerts.reserve(RESERVE_SIZE);
 }
 
-void CaptureDrawCall(DWORD fvf,
+void CaptureDrawCall(D3DPRIMITIVETYPE primType,
+                     DWORD fvf,
                      const void* vertices, DWORD vertexCount,
                      const WORD* indices, DWORD indexCount,
                      const float* worldMatrix,
-                     const float* viewMatrix,
-                     const float* projMatrix,
-                     const D3DVIEWPORT7& viewport) {
+                     VkTexHandle* texture) {
     if (!vertices || vertexCount == 0) return;
 
-    bool isRHW = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
+    // Skip pre-transformed 2D vertices (UI, HUD)
+    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) return;
+
     DWORD stride = CalcFVFStride(fvf);
     const unsigned char* src = (const unsigned char*)vertices;
+    uint32_t startVert = (uint32_t)s_worldVerts.size();
 
-    // Pre-compute inverse(View * Proj) for RHW unprojection
-    float invVP[16];
-    bool haveInvVP = false;
-    if (isRHW) {
-        float vp[16];
-        MatMul4x4(vp, viewMatrix, projMatrix);
-        haveInvVP = Invert4x4(invVP, vp);
-    }
+    auto getVert = [&](DWORD i) -> WorldVertex {
+        return ExtractWorldVertex(src + i * stride, fvf, worldMatrix);
+    };
 
-    // Determine which vertices to process
-    // For indexed draws, iterate unique indices; for non-indexed, iterate all
     if (indices && indexCount > 0) {
-        for (DWORD i = 0; i < indexCount; i++) {
-            WORD idx = indices[i];
-            if (idx >= vertexCount) continue;
-            const unsigned char* ptr = src + idx * stride;
-
-            float px, py, pz, rhw;
-            ExtractPosition(ptr, fvf, px, py, pz, rhw);
-
-            WorldVertex wv;
-            if (isRHW && haveInvVP) {
-                wv = UnprojectRHW(px, py, pz, rhw, invVP, viewport);
-            } else {
-                wv = TransformPoint(px, py, pz, worldMatrix);
+        switch (primType) {
+        case D3DPT_TRIANGLELIST:
+            for (DWORD i = 0; i + 2 < indexCount; i += 3) {
+                if (indices[i] >= vertexCount || indices[i+1] >= vertexCount || indices[i+2] >= vertexCount) continue;
+                EmitTriangle(getVert(indices[i]), getVert(indices[i+1]), getVert(indices[i+2]));
             }
-            s_worldVerts.push_back(wv);
+            break;
+        case D3DPT_TRIANGLEFAN:
+            if (indexCount >= 3 && indices[0] < vertexCount) {
+                WorldVertex v0 = getVert(indices[0]);
+                for (DWORD i = 1; i + 1 < indexCount; i++) {
+                    if (indices[i] >= vertexCount || indices[i+1] >= vertexCount) continue;
+                    EmitTriangle(v0, getVert(indices[i]), getVert(indices[i+1]));
+                }
+            }
+            break;
+        case D3DPT_TRIANGLESTRIP:
+            for (DWORD i = 0; i + 2 < indexCount; i++) {
+                if (indices[i] >= vertexCount || indices[i+1] >= vertexCount || indices[i+2] >= vertexCount) continue;
+                if (i & 1)
+                    EmitTriangle(getVert(indices[i]), getVert(indices[i+2]), getVert(indices[i+1]));
+                else
+                    EmitTriangle(getVert(indices[i]), getVert(indices[i+1]), getVert(indices[i+2]));
+            }
+            break;
+        default:
+            break;
         }
     } else {
-        for (DWORD i = 0; i < vertexCount; i++) {
-            const unsigned char* ptr = src + i * stride;
-
-            float px, py, pz, rhw;
-            ExtractPosition(ptr, fvf, px, py, pz, rhw);
-
-            WorldVertex wv;
-            if (isRHW && haveInvVP) {
-                wv = UnprojectRHW(px, py, pz, rhw, invVP, viewport);
-            } else {
-                wv = TransformPoint(px, py, pz, worldMatrix);
+        switch (primType) {
+        case D3DPT_TRIANGLELIST:
+            for (DWORD i = 0; i + 2 < vertexCount; i += 3)
+                EmitTriangle(getVert(i), getVert(i+1), getVert(i+2));
+            break;
+        case D3DPT_TRIANGLEFAN:
+            if (vertexCount >= 3) {
+                WorldVertex v0 = getVert(0);
+                for (DWORD i = 1; i + 1 < vertexCount; i++)
+                    EmitTriangle(v0, getVert(i), getVert(i+1));
             }
-            s_worldVerts.push_back(wv);
+            break;
+        case D3DPT_TRIANGLESTRIP:
+            for (DWORD i = 0; i + 2 < vertexCount; i++) {
+                if (i & 1)
+                    EmitTriangle(getVert(i), getVert(i+2), getVert(i+1));
+                else
+                    EmitTriangle(getVert(i), getVert(i+1), getVert(i+2));
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    uint32_t emitted = (uint32_t)s_worldVerts.size() - startVert;
+    if (emitted > 0) {
+        // Merge with previous batch if same texture
+        if (!s_batches.empty() && s_batches.back().texture == texture) {
+            s_batches.back().vertexCount += emitted;
+        } else {
+            s_batches.push_back({ texture, startVert, emitted });
         }
     }
 }
@@ -215,37 +207,17 @@ void PrintIfReady() {
     if (now - s_lastPrintMs < 1000) return;
     s_lastPrintMs = now;
 
-    if (s_worldVerts.empty()) {
-        printf("[WorldReconstructor] No vertices this frame\n");
-        fflush(stdout);
-        return;
-    }
-
-    printf("[WorldReconstructor] %zu world vertices:\n", s_worldVerts.size());
-    // Print a summary: first 20 and last 5 to keep output manageable
-    size_t total = s_worldVerts.size();
-    size_t printHead = (total > 20) ? 20 : total;
-    for (size_t i = 0; i < printHead; i++) {
-        const auto& v = s_worldVerts[i];
-        // printf("  [%zu] (%.1f, %.1f, %.1f)\n", i, v.x, v.y, v.z);
-    }
-    if (total > 25) {
-        // printf("  ... (%zu vertices omitted) ...\n", total - 25);
-        for (size_t i = total - 5; i < total; i++) {
-            const auto& v = s_worldVerts[i];
-            // printf("  [%zu] (%.1f, %.1f, %.1f)\n", i, v.x, v.y, v.z);
-        }
-    } else if (total > printHead) {
-        for (size_t i = printHead; i < total; i++) {
-            const auto& v = s_worldVerts[i];
-            // printf("  [%zu] (%.1f, %.1f, %.1f)\n", i, v.x, v.y, v.z);
-        }
-    }
+    size_t triCount = s_worldVerts.size() / 3;
+    printf("[WorldReconstructor] %zu triangles, %zu batches\n", triCount, s_batches.size());
     fflush(stdout);
 }
 
 const std::vector<WorldVertex>& GetWorldVertices() {
     return s_worldVerts;
+}
+
+const std::vector<DrawBatch>& GetBatches() {
+    return s_batches;
 }
 
 } // namespace WorldReconstructor

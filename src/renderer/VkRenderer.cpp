@@ -4,10 +4,12 @@
 #include "Types.h"
 #include "Pipeline.h"
 #include "TextureUtils.h"
+#include "WorldReconstructor.h"
 #include "../shaders/GothicShaders.h"
 #include <vector>
 #include <string>
 #include <cstring>
+#include <cmath>
 #include <unordered_map>
 
 using namespace gvlk;
@@ -1281,6 +1283,129 @@ void DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices, DWORD
 void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
                           DWORD vertexCount, const WORD* indices, DWORD indexCount) {
     EmitDrawCall(type, fvf, vertices, vertexCount, indices, indexCount);
+}
+
+// ---------------------------------------------------------------------------
+// Build a left-handed perspective projection matrix (row-major, D3D convention)
+// Depth range [0, 1], matching D3D/Vulkan.
+// ---------------------------------------------------------------------------
+static void MakePerspectiveLH(float* out, float fovYRad, float aspect, float zn, float zf) {
+    memset(out, 0, 16 * sizeof(float));
+    float yscale = 1.0f / tanf(fovYRad * 0.5f);
+    float xscale = yscale / aspect;
+    out[0]  = xscale;
+    out[5]  = yscale;
+    out[10] = zf / (zf - zn);
+    out[11] = 1.0f;
+    out[14] = -zn * zf / (zf - zn);
+}
+
+void DrawReconstructedWorld() {
+    if (!s_frameActive) return;
+
+    const auto& worldVerts = WorldReconstructor::GetWorldVertices();
+    const auto& batches    = WorldReconstructor::GetBatches();
+    if (worldVerts.empty() || batches.empty()) return;
+
+    uint32_t totalVerts = (uint32_t)worldVerts.size();
+    if (s_vertexOffset + totalVerts > MAX_VERTICES) {
+        totalVerts = MAX_VERTICES - s_vertexOffset;
+        totalVerts -= totalVerts % 3;
+        if (totalVerts == 0) return;
+    }
+
+    // Upload all world vertices as GVertex (with UVs)
+    uint32_t uploadStart = s_vertexOffset;
+    for (uint32_t i = 0; i < totalVerts; i++) {
+        GVertex gv = {};
+        gv.px = worldVerts[i].x;
+        gv.py = worldVerts[i].y;
+        gv.pz = worldVerts[i].z;
+        gv.u  = worldVerts[i].u;
+        gv.v  = worldVerts[i].v;
+        gv.color = worldVerts[i].color;
+        s_curVerts[s_vertexOffset++] = gv;
+    }
+
+    // Build VP = View * Projection(FOV 90)
+    float aspect = (float)s_windowW / (float)s_windowH;
+    float proj[16];
+    MakePerspectiveLH(proj, 3.14159265f * 0.5f, aspect, 1.0f, 50000.0f);
+
+    float vp[16];
+    MatMul(vp, s_viewMatrix, proj);
+
+    // Flip Y for Vulkan NDC
+    vp[1]  = -vp[1];
+    vp[5]  = -vp[5];
+    vp[9]  = -vp[9];
+    vp[13] = -vp[13];
+
+    // Pipeline: depth test on, depth write on, no blend
+    PipelineKey key = {};
+    key.depthTestEnabled = 1;
+    key.depthWriteEnabled = 1;
+    key.depthFunc = (uint8_t)D3DCMP_LESSEQUAL;
+    key.blendEnabled = 0;
+    key.srcBlend = (uint8_t)D3DBLEND_ONE;
+    key.dstBlend = (uint8_t)D3DBLEND_ZERO;
+
+    VkPipeline pipeline = GetOrCreatePipeline(key);
+    if (pipeline == VK_NULL_HANDLE) return;
+
+    VkCommandBuffer cmd = s_cmdBufs[s_frameIndex];
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+    // Full swapchain viewport
+    VkExtent2D ext = GVulkan_GetSwapExtent();
+    VkViewport viewport = {};
+    viewport.width = (float)ext.width;
+    viewport.height = (float)ext.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor = {};
+    scissor.extent = ext;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Bind vertex buffer (all vertices are contiguous)
+    VkDeviceSize vbOffset = uploadStart * sizeof(GVertex);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &s_curVertBuf, &vbOffset);
+
+    // Draw each batch with its own texture
+    for (const auto& batch : batches) {
+        // Skip batches that exceed what we uploaded
+        if (batch.startVertex + batch.vertexCount > totalVerts) break;
+
+        PushConstants pc = {};
+        memcpy(pc.mvp, vp, 64);
+        pc.alphaRef = 0.0f;
+
+        VkDescriptorSet tex0Set = s_whiteTex.descSet;
+        if (batch.texture && batch.texture->descSet) {
+            tex0Set = batch.texture->descSet;
+            pc.flags = 1;          // bit0 = hasTex0
+            pc.stage0ColorOp = 4;  // D3DTOP_MODULATE: texture * diffuse
+            pc.stage0Args = (0u << 16) | 2u; // arg1=D3DTA_TEXTURE(2), arg2=D3DTA_DIFFUSE(0)
+            pc.stage0AlphaOp = 4;
+            pc.stage0AlphaArgs = (0u << 16) | 2u;
+        } else {
+            pc.flags = 0;
+            pc.stage0ColorOp = 0;  // D3DTOP_DISABLE → uses diffuse
+        }
+
+        vkCmdPushConstants(cmd, s_pipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(PushConstants), &pc);
+
+        VkDescriptorSet descSets[2] = { tex0Set, s_whiteTex.descSet };
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+
+        vkCmdDraw(cmd, batch.vertexCount, 1, batch.startVertex, 0);
+    }
 }
 
 } // namespace VkRenderer

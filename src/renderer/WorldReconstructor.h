@@ -1,42 +1,52 @@
 #pragma once
-// WorldReconstructor.h — Captures drawn vertices and reconstructs world positions
+// WorldReconstructor.h — Captures drawn triangles and reconstructs world positions
 //
 // Per draw call, vertices are transformed from their input space to world space:
 //   - XYZ vertices:    world_pos = vertex * WorldMatrix
-//   - XYZRHW vertices: unprojected via inverse(View * Projection) + viewport
+//   - XYZRHW vertices: skipped (2D UI elements)
 //
-// Accumulated world positions are printed once per second, then cleared.
+// Triangle topology is preserved for 3D rendering.
+// Accumulated triangles are rendered via VkRenderer::DrawReconstructedWorld().
 
 #include <cstdint>
 #include <vector>
 #include <d3d.h>
 
+struct VkTexHandle; // forward declare
+
 namespace WorldReconstructor {
 
 struct WorldVertex {
     float x, y, z;
+    float u, v;
+    uint32_t color; // ARGB D3DCOLOR
+};
+
+struct DrawBatch {
+    VkTexHandle* texture;
+    uint32_t startVertex;
+    uint32_t vertexCount;
 };
 
 // Call at the start of each frame (BeginScene) to clear accumulated data
 void BeginFrame();
 
 // Call from every draw call to capture vertices and reconstruct world positions.
-// worldMatrix/viewMatrix/projMatrix are the current D3D7 transform state (row-major 4x4).
-// viewport is the current D3D7 viewport.
-// fvf is the FVF flags, vertices is raw vertex data, count is vertex count.
-// indices/indexCount are for indexed draws (nullptr/0 for non-indexed).
-void CaptureDrawCall(DWORD fvf,
+// texture is the currently bound VkTexHandle (stage 0), may be nullptr.
+void CaptureDrawCall(D3DPRIMITIVETYPE primType,
+                     DWORD fvf,
                      const void* vertices, DWORD vertexCount,
                      const WORD* indices, DWORD indexCount,
                      const float* worldMatrix,
-                     const float* viewMatrix,
-                     const float* projMatrix,
-                     const D3DVIEWPORT7& viewport);
+                     VkTexHandle* texture);
 
-// Call once per frame (or on a timer) to print accumulated world positions
+// Call once per frame to print stats
 void PrintIfReady();
 
-// Returns accumulated world vertices (read-only) for other consumers
+// Returns accumulated world vertices in triangle-list order
 const std::vector<WorldVertex>& GetWorldVertices();
+
+// Returns draw batches (grouped by texture)
+const std::vector<DrawBatch>& GetBatches();
 
 } // namespace WorldReconstructor
