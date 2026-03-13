@@ -248,25 +248,33 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::PreLoad(LPDIRECTDRAWSURFACE7) { r
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, LPVOID verts, DWORD count, DWORD) {
     if (!contextAcquired || !verts || count == 0) return S_OK;
-    VkTexHandle* tex = nullptr;
-    if (boundTextures[0]) {
-        if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
-        tex = boundTextures[0]->GetVkTexture();
+    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
+        VkRenderer::DrawPrimitive(type, fvf, verts, count);
+    } else {
+        VkTexHandle* tex = nullptr;
+        if (boundTextures[0]) {
+            if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
+            tex = boundTextures[0]->GetVkTexture();
+        }
+        WorldReconstructor::CaptureDrawCall(type, fvf, verts, count, nullptr, 0,
+            (const float*)&worldMatrix, tex);
     }
-    WorldReconstructor::CaptureDrawCall(type, fvf, verts, count, nullptr, 0,
-        (const float*)&worldMatrix, tex);
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, LPVOID verts, DWORD vertCount, LPWORD indices, DWORD idxCount, DWORD) {
     if (!contextAcquired || !verts || !indices || idxCount == 0) return S_OK;
-    VkTexHandle* tex = nullptr;
-    if (boundTextures[0]) {
-        if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
-        tex = boundTextures[0]->GetVkTexture();
+    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
+        VkRenderer::DrawIndexedPrimitive(type, fvf, verts, vertCount, indices, idxCount);
+    } else {
+        VkTexHandle* tex = nullptr;
+        if (boundTextures[0]) {
+            if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
+            tex = boundTextures[0]->GetVkTexture();
+        }
+        WorldReconstructor::CaptureDrawCall(type, fvf, verts, vertCount, indices, idxCount,
+            (const float*)&worldMatrix, tex);
     }
-    WorldReconstructor::CaptureDrawCall(type, fvf, verts, vertCount, indices, idxCount,
-        (const float*)&worldMatrix, tex);
     return S_OK;
 }
 
@@ -289,13 +297,17 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE 
     DWORD stride = CalcFVFStride(fvf);
     const unsigned char* verts = (const unsigned char*)data + startVertex * stride;
 
-    VkTexHandle* tex = nullptr;
-    if (boundTextures[0]) {
-        if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
-        tex = boundTextures[0]->GetVkTexture();
+    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
+        VkRenderer::DrawPrimitive(type, fvf, verts, numVertices);
+    } else {
+        VkTexHandle* tex = nullptr;
+        if (boundTextures[0]) {
+            if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
+            tex = boundTextures[0]->GetVkTexture();
+        }
+        WorldReconstructor::CaptureDrawCall(type, fvf, verts, numVertices, nullptr, 0,
+            (const float*)&worldMatrix, tex);
     }
-    WorldReconstructor::CaptureDrawCall(type, fvf, verts, numVertices, nullptr, 0,
-        (const float*)&worldMatrix, tex);
 
     vb->Unlock();
     return S_OK;
@@ -315,13 +327,17 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITI
     DWORD stride = CalcFVFStride(fvf);
     const unsigned char* verts = (const unsigned char*)data + startVertex * stride;
 
-    VkTexHandle* tex = nullptr;
-    if (boundTextures[0]) {
-        if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
-        tex = boundTextures[0]->GetVkTexture();
+    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
+        VkRenderer::DrawIndexedPrimitive(type, fvf, verts, numVertices, indices, idxCount);
+    } else {
+        VkTexHandle* tex = nullptr;
+        if (boundTextures[0]) {
+            if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
+            tex = boundTextures[0]->GetVkTexture();
+        }
+        WorldReconstructor::CaptureDrawCall(type, fvf, verts, numVertices, indices, idxCount,
+            (const float*)&worldMatrix, tex);
     }
-    WorldReconstructor::CaptureDrawCall(type, fvf, verts, numVertices, indices, idxCount,
-        (const float*)&worldMatrix, tex);
 
     vb->Unlock();
     return S_OK;
@@ -337,6 +353,16 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::GetTexture(DWORD stage, LPDIRECTD
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::SetTexture(DWORD stage, LPDIRECTDRAWSURFACE7 tex) {
     if (stage >= 8) return S_OK;
     boundTextures[stage] = static_cast<StubDirectDrawSurface7*>(tex);
+    if (contextAcquired) {
+        StubDirectDrawSurface7* surf = boundTextures[stage];
+        VkTexHandle* vkTex = nullptr;
+        if (surf) {
+            if (surf->IsTextureDirty()) surf->UploadTextureToVk();
+            vkTex = surf->GetVkTexture();
+        }
+        if (stage == 0) VkRenderer::BindTexture(vkTex);
+        else if (stage == 1) VkRenderer::BindTexture2(vkTex);
+    }
     return S_OK;
 }
 
