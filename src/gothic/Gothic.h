@@ -77,6 +77,7 @@ namespace Addr {
     constexpr DWORD oCam_ScreenFade  = 0x8C0;      // int (bool)
     constexpr DWORD oCam_ScreenFadeColor = 0x8C4;  // DWORD (zColor)
     constexpr DWORD oCam_CinemaScope = 0x8E4;      // int (bool)
+    constexpr DWORD fCam_GetFov      = 0x0054A8F0; // zCCamera::GetFOV(float&, float&)
 
     // zCVob offsets
     constexpr DWORD oVob_WorldMatrix = 0x3C;       // Float4x4 (inline 4×4)
@@ -202,6 +203,8 @@ struct CameraInfo {
     bool  valid;
     float nearPlane;
     float farPlane;
+    float fovH;
+    float fovV;
     bool  screenFadeEnabled;
     DWORD screenFadeColor;
     bool  cinemaScopeEnabled;
@@ -322,6 +325,9 @@ public:
         ci.valid = true;
         ci.nearPlane = *reinterpret_cast<float*>(G_OFFSET(cam, Addr::oCam_NearPlane));
         ci.farPlane  = *reinterpret_cast<float*>(G_OFFSET(cam, Addr::oCam_FarPlane));
+        using GetFovFn = void(__thiscall*)(zCCamera*, float&, float&);
+        auto getFov = reinterpret_cast<GetFovFn>(Addr::fCam_GetFov);
+        if (getFov) getFov(cam, ci.fovH, ci.fovV);
         ci.screenFadeEnabled = *reinterpret_cast<int*>(G_OFFSET(cam, Addr::oCam_ScreenFade)) != 0;
         ci.screenFadeColor   = *reinterpret_cast<DWORD*>(G_OFFSET(cam, Addr::oCam_ScreenFadeColor));
         ci.cinemaScopeEnabled = *reinterpret_cast<int*>(G_OFFSET(cam, Addr::oCam_CinemaScope)) != 0;

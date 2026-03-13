@@ -3,6 +3,7 @@
 #define VMA_IMPLEMENTATION
 #include "VkWindow.h"
 #include "ImGuiManager.h"
+#include "../gothic/Gothic.h"
 #include <cstdio>
 #include <vector>
 #include <algorithm>
@@ -51,6 +52,7 @@ static VkFence           g_inFlightFence[MAX_FRAMES_IN_FLIGHT]  = {};
 static int               g_currentFrame   = 0;
 static uint32_t          g_imageIndex     = 0;
 static bool              g_swapchainDirty = false;
+static ULONGLONG         g_lastCameraLogMs = 0;
 
 static LRESULT CALLBACK GothicSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -662,6 +664,20 @@ void GVulkan_OnSetWindow(HWND hwnd) {
 
 bool GVulkan_BeginFrame(VkCommandBuffer cmd) {
     if (!g_ready || !g_device) return false;
+
+    ULONGLONG nowMs = GetTickCount64();
+    if (nowMs - g_lastCameraLogMs >= 1000) {
+        g_lastCameraLogMs = nowMs;
+        if (Gothic::Game::Get().IsInGame()) {
+            auto camPos = Gothic::Game::GetCameraVobPosition();
+            auto camInfo = Gothic::Game::GetCameraInfo();
+            if (camPos.valid && camInfo.valid) {
+                printf("[GVulkan] Camera: x=%.2f y=%.2f z=%.2f fovH=%.2f fovV=%.2f\n",
+                       camPos.pos.x, camPos.pos.y, camPos.pos.z, camInfo.fovH, camInfo.fovV);
+                fflush(stdout);
+            }
+        }
+    }
 
     vkWaitForFences(g_device, 1, &g_inFlightFence[g_currentFrame], VK_TRUE, UINT64_MAX);
 

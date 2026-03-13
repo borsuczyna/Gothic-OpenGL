@@ -3,6 +3,7 @@
 #include "../Debug.h"
 #include "../renderer/VkRenderer.h"
 #include "../renderer/VkWindow.h"
+#include "../renderer/WorldReconstructor.h"
 #include <cstring>
 
 static DWORD CalcFVFStride(DWORD fvf) {
@@ -113,6 +114,8 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::EnumTextureFormats(LPD3DENUMPIXEL
 HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::BeginScene() {
     EnsureContext();
     GVulkan_ResetPresentFlag();
+    WorldReconstructor::PrintIfReady();
+    WorldReconstructor::BeginFrame();
     if (contextAcquired) {
         int ww = GVulkan_GetWindowWidth();
         int wh = GVulkan_GetWindowHeight();
@@ -256,6 +259,8 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE ty
         VkRenderer::BindTexture2(nullptr);
     }
 
+    WorldReconstructor::CaptureDrawCall(fvf, verts, count, nullptr, 0,
+        (const float*)&worldMatrix, (const float*)&viewMatrix, (const float*)&projMatrix, viewport);
     VkRenderer::DrawPrimitive(type, fvf, verts, count);
     return S_OK;
 }
@@ -276,6 +281,8 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVE
         VkRenderer::BindTexture2(nullptr);
     }
 
+    WorldReconstructor::CaptureDrawCall(fvf, verts, vertCount, indices, idxCount,
+        (const float*)&worldMatrix, (const float*)&viewMatrix, (const float*)&projMatrix, viewport);
     VkRenderer::DrawIndexedPrimitive(type, fvf, verts, vertCount, indices, idxCount);
     return S_OK;
 }
@@ -312,6 +319,8 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE 
         VkRenderer::BindTexture2(nullptr);
     }
 
+    WorldReconstructor::CaptureDrawCall(fvf, verts, numVertices, nullptr, 0,
+        (const float*)&worldMatrix, (const float*)&viewMatrix, (const float*)&projMatrix, viewport);
     VkRenderer::DrawPrimitive(type, fvf, verts, numVertices);
 
     vb->Unlock();
@@ -345,6 +354,8 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITI
         VkRenderer::BindTexture2(nullptr);
     }
 
+    WorldReconstructor::CaptureDrawCall(fvf, verts, numVertices, indices, idxCount,
+        (const float*)&worldMatrix, (const float*)&viewMatrix, (const float*)&projMatrix, viewport);
     VkRenderer::DrawIndexedPrimitive(type, fvf, verts, numVertices, indices, idxCount);
 
     vb->Unlock();

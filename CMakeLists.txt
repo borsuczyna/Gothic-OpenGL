@@ -8,6 +8,7 @@ add_library(ddraw SHARED
     src/dllmain.cpp
     src/renderer/VkWindow.cpp
     src/renderer/VkRenderer.cpp
+    src/renderer/WorldReconstructor.cpp
     src/renderer/ImGuiManager.cpp
     src/renderer/Pipeline.cpp
     src/renderer/TextureUtils.cpp
