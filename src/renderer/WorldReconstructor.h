@@ -19,29 +19,37 @@ namespace WorldReconstructor {
 struct WorldVertex {
     float x, y, z;
     float u, v;
+    float u2, v2;
     uint32_t color; // ARGB D3DCOLOR
+};
+
+// Snapshot of all rendering state needed to replay a batch
+struct BatchRenderState {
+    // Pipeline state
+    bool     blendEnabled;
+    uint8_t  srcBlend;
+    uint8_t  dstBlend;
+    bool     alphaTestEnabled;
+    float    alphaRef;
+    bool     depthWriteEnabled;
+    // Texture stage state
+    uint32_t stage0ColorOp;
+    uint32_t stage1ColorOp;
+    uint32_t stage0Arg1, stage0Arg2;
+    uint32_t stage1Arg1, stage1Arg2;
+    uint32_t stage0AlphaOp;
+    uint32_t stage0AlphaArg1, stage0AlphaArg2;
+    uint32_t stage0TexCoordIdx, stage1TexCoordIdx;
+    uint32_t textureFactor;
+    // Second texture
+    VkTexHandle* texture2;
 };
 
 struct DrawBatch {
     VkTexHandle* texture;
     uint32_t startVertex;
     uint32_t vertexCount;
-    // Render state snapshot
-    bool     blendEnabled;
-    uint8_t  srcBlend;
-    uint8_t  dstBlend;
-    bool     alphaTestEnabled;
-    float    alphaRef;
-    bool     depthWriteEnabled;
-};
-
-struct BatchRenderState {
-    bool     blendEnabled;
-    uint8_t  srcBlend;
-    uint8_t  dstBlend;
-    bool     alphaTestEnabled;
-    float    alphaRef;
-    bool     depthWriteEnabled;
+    BatchRenderState rs;
 };
 
 // Call at the start of each frame (BeginScene) to clear accumulated data
@@ -49,7 +57,7 @@ void BeginFrame();
 
 // Call from every draw call to capture vertices and reconstruct world positions.
 // texture is the currently bound VkTexHandle (stage 0), may be nullptr.
-// rs is a snapshot of the current blend/alpha/depth render state.
+// rs is a snapshot of all relevant render state.
 void CaptureDrawCall(D3DPRIMITIVETYPE primType,
                      DWORD fvf,
                      const void* vertices, DWORD vertexCount,
@@ -64,7 +72,7 @@ void PrintIfReady();
 // Returns accumulated world vertices in triangle-list order
 const std::vector<WorldVertex>& GetWorldVertices();
 
-// Returns draw batches (grouped by texture)
+// Returns draw batches (grouped by compatible state)
 const std::vector<DrawBatch>& GetBatches();
 
 } // namespace WorldReconstructor

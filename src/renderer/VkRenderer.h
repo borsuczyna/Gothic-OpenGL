@@ -64,4 +64,21 @@ void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices
 
 void DrawReconstructedWorld();
 
+// Getters for current render state (used by ProxyDevice7 to snapshot state for WorldReconstructor)
+DWORD GetStage0ColorOp();
+DWORD GetStage1ColorOp();
+DWORD GetStage0Arg1();
+DWORD GetStage0Arg2();
+DWORD GetStage1Arg1();
+DWORD GetStage1Arg2();
+DWORD GetStage0AlphaOp();
+DWORD GetStage0AlphaArg1();
+DWORD GetStage0AlphaArg2();
+DWORD GetStage0TexCoordIdx();
+DWORD GetStage1TexCoordIdx();
+DWORD GetTextureFactor();
+VkTexHandle* GetBoundTexture2();
+bool IsTimecycleEnabled();
+uint32_t GetTimecycleColor();
+
 } // namespace VkRenderer

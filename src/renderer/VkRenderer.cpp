@@ -1314,7 +1314,7 @@ void DrawReconstructedWorld() {
         if (totalVerts == 0) return;
     }
 
-    // Upload all world vertices as GVertex (with UVs)
+    // Upload all world vertices as GVertex (with UVs + UV2)
     uint32_t uploadStart = s_vertexOffset;
     for (uint32_t i = 0; i < totalVerts; i++) {
         GVertex gv = {};
@@ -1323,6 +1323,8 @@ void DrawReconstructedWorld() {
         gv.pz = worldVerts[i].z;
         gv.u  = worldVerts[i].u;
         gv.v  = worldVerts[i].v;
+        gv.u2 = worldVerts[i].u2;
+        gv.v2 = worldVerts[i].v2;
         gv.color = worldVerts[i].color;
         s_curVerts[s_vertexOffset++] = gv;
     }
@@ -1339,38 +1341,32 @@ void DrawReconstructedWorld() {
 
     VkCommandBuffer cmd = s_cmdBufs[s_frameIndex];
 
-    // Full swapchain viewport
-    VkExtent2D ext = GVulkan_GetSwapExtent();
-    VkViewport viewport = {};
-    viewport.width = (float)ext.width;
-    viewport.height = (float)ext.height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    VkRect2D scissor = {};
-    scissor.extent = ext;
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
     // Bind vertex buffer (all vertices are contiguous)
     VkDeviceSize vbOffset = uploadStart * sizeof(GVertex);
     vkCmdBindVertexBuffers(cmd, 0, 1, &s_curVertBuf, &vbOffset);
 
     VkPipeline lastPipeline = VK_NULL_HANDLE;
 
-    // Draw each batch with its own texture and render state
+    // Compute viewport scaling (matching EmitDrawCall for 3D draws)
+    VkExtent2D ext = GVulkan_GetSwapExtent();
+    float sx = (float)ext.width  / (float)s_gameW;
+    float sy = (float)ext.height / (float)s_gameH;
+
+    // Draw each batch with its own texture and full render state
     for (const auto& batch : batches) {
         // Skip batches that exceed what we uploaded
         if (batch.startVertex + batch.vertexCount > totalVerts) break;
 
+        const auto& rs = batch.rs;
+
         // Per-batch pipeline based on blend/alpha/depth state
         PipelineKey key = {};
         key.depthTestEnabled = 1;
-        key.depthWriteEnabled = batch.depthWriteEnabled ? 1 : 0;
+        key.depthWriteEnabled = rs.depthWriteEnabled ? 1 : 0;
         key.depthFunc = (uint8_t)D3DCMP_LESSEQUAL;
-        key.blendEnabled = batch.blendEnabled ? 1 : 0;
-        key.srcBlend = batch.srcBlend;
-        key.dstBlend = batch.dstBlend;
+        key.blendEnabled = rs.blendEnabled ? 1 : 0;
+        key.srcBlend = rs.srcBlend;
+        key.dstBlend = rs.dstBlend;
 
         VkPipeline pipeline = GetOrCreatePipeline(key);
         if (pipeline == VK_NULL_HANDLE) continue;
@@ -1379,36 +1375,85 @@ void DrawReconstructedWorld() {
             lastPipeline = pipeline;
         }
 
+        // Build push constants matching EmitDrawCall's logic for 3D draws
         PushConstants pc = {};
         memcpy(pc.mvp, vp, 64);
 
-        VkDescriptorSet tex0Set = s_whiteTex.descSet;
-        if (batch.texture && batch.texture->descSet) {
-            tex0Set = batch.texture->descSet;
-            pc.flags = 1;          // bit0 = hasTex0
-            if (batch.alphaTestEnabled) pc.flags |= 2; // bit1 = alphaTest
-            if (batch.texture->hasAlpha) pc.flags |= 8; // bit3 = texHasAlpha
-            pc.stage0ColorOp = 4;  // D3DTOP_MODULATE: texture * diffuse
-            pc.stage0Args = (0u << 16) | 2u; // arg1=D3DTA_TEXTURE(2), arg2=D3DTA_DIFFUSE(0)
-            pc.stage0AlphaOp = 4;
-            pc.stage0AlphaArgs = (0u << 16) | 2u;
-        } else {
-            pc.flags = 0;
-            if (batch.alphaTestEnabled) pc.flags |= 2;
-            pc.stage0ColorOp = 0;  // D3DTOP_DISABLE → uses diffuse
+        pc.flags = 0;
+        if (batch.texture)   pc.flags |= 1;  // bit0 = hasTex0
+        if (rs.alphaTestEnabled) pc.flags |= 2;  // bit1 = alphaTest
+        if (rs.texture2 && rs.stage1ColorOp > 1) pc.flags |= 4;  // bit2 = hasTex1
+        if (batch.texture && batch.texture->hasAlpha) pc.flags |= 8;  // bit3 = texHasAlpha
+        if (s_timeCycle.IsEnabled()) {
+            pc.flags |= 16u; // bit4 = timecycle
+            pc.timecycleColor = s_timeCycle.GetPackedColor();
         }
-        pc.alphaRef = batch.alphaRef;
+
+        pc.alphaRef       = rs.alphaRef;
+        pc.stage0ColorOp  = rs.stage0ColorOp;
+        pc.stage1ColorOp  = rs.stage1ColorOp;
+        pc.stage0Args     = (rs.stage0Arg2 << 16) | rs.stage0Arg1;
+        pc.stage1Args     = (rs.stage1Arg2 << 16) | rs.stage1Arg1;
+        pc.texCoordIdx    = (rs.stage1TexCoordIdx << 16) | rs.stage0TexCoordIdx;
+        pc.stage0AlphaOp  = rs.stage0AlphaOp;
+        pc.stage0AlphaArgs = (rs.stage0AlphaArg2 << 16) | rs.stage0AlphaArg1;
+        pc.textureFactor  = rs.textureFactor;
+
+        // Viewport info (matching EmitDrawCall's 3D path)
+        pc.vpPos[0]  = (float)s_vpX;
+        pc.vpPos[1]  = (float)s_vpY;
+        pc.vpSize[0] = (float)s_vpW;
+        pc.vpSize[1] = (float)s_vpH;
 
         vkCmdPushConstants(cmd, s_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(PushConstants), &pc);
 
-        VkDescriptorSet descSets[2] = { tex0Set, s_whiteTex.descSet };
+        // Bind textures (stage 0 + stage 1)
+        VkDescriptorSet descSets[2];
+        descSets[0] = (batch.texture && batch.texture->descSet)
+                      ? batch.texture->descSet : s_whiteTex.descSet;
+        descSets[1] = (rs.texture2 && rs.texture2->descSet)
+                      ? rs.texture2->descSet : s_whiteTex.descSet;
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+
+        // Set viewport scaled to swapchain (matching EmitDrawCall's 3D path)
+        VkViewport viewport = {};
+        viewport.x = s_vpX * sx;
+        viewport.y = s_vpY * sy;
+        viewport.width  = s_vpW * sx;
+        viewport.height = s_vpH * sy;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor = {};
+        scissor.offset = { (int32_t)viewport.x, (int32_t)viewport.y };
+        scissor.extent = { (uint32_t)viewport.width, (uint32_t)viewport.height };
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         vkCmdDraw(cmd, batch.vertexCount, 1, batch.startVertex, 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// State getters for WorldReconstructor snapshots
+// ---------------------------------------------------------------------------
+DWORD GetStage0ColorOp()     { return s_stage0ColorOp; }
+DWORD GetStage1ColorOp()     { return s_stage1ColorOp; }
+DWORD GetStage0Arg1()        { return s_stage0Arg1; }
+DWORD GetStage0Arg2()        { return s_stage0Arg2; }
+DWORD GetStage1Arg1()        { return s_stage1Arg1; }
+DWORD GetStage1Arg2()        { return s_stage1Arg2; }
+DWORD GetStage0AlphaOp()     { return s_stage0AlphaOp; }
+DWORD GetStage0AlphaArg1()   { return s_stage0AlphaArg1; }
+DWORD GetStage0AlphaArg2()   { return s_stage0AlphaArg2; }
+DWORD GetStage0TexCoordIdx() { return s_stage0TexCoordIdx; }
+DWORD GetStage1TexCoordIdx() { return s_stage1TexCoordIdx; }
+DWORD GetTextureFactor()     { return s_textureFactor; }
+VkTexHandle* GetBoundTexture2() { return s_boundTexture2; }
+bool IsTimecycleEnabled()    { return s_timeCycle.IsEnabled(); }
+uint32_t GetTimecycleColor() { return s_timeCycle.GetPackedColor(); }
 
 } // namespace VkRenderer

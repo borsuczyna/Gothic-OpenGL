@@ -72,7 +72,7 @@ static DWORD CalcUVOffset(DWORD fvf) {
     return offset;
 }
 
-// Extract world-space vertex with UV and color from raw FVF data
+// Extract world-space vertex with UV, UV2, and color from raw FVF data
 static WorldVertex ExtractWorldVertex(const unsigned char* ptr, DWORD fvf,
                                       const float* worldMatrix) {
     WorldVertex wv;
@@ -88,13 +88,23 @@ static WorldVertex ExtractWorldVertex(const unsigned char* ptr, DWORD fvf,
     }
 
     DWORD texCount = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    DWORD uvOff = CalcUVOffset(fvf);
     if (texCount > 0) {
-        DWORD uvOff = CalcUVOffset(fvf);
         wv.u = *(const float*)(ptr + uvOff);
         wv.v = *(const float*)(ptr + uvOff + 4);
     } else {
         wv.u = 0.0f;
         wv.v = 0.0f;
+    }
+    if (texCount > 1) {
+        // Second tex coord set (lightmaps/detail maps)
+        // First set is 2 floats (8 bytes) for standard 2D coords
+        DWORD uv2Off = uvOff + 8;
+        wv.u2 = *(const float*)(ptr + uv2Off);
+        wv.v2 = *(const float*)(ptr + uv2Off + 4);
+    } else {
+        wv.u2 = 0.0f;
+        wv.v2 = 0.0f;
     }
     return wv;
 }
@@ -195,25 +205,37 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
     uint32_t emitted = (uint32_t)s_worldVerts.size() - startVert;
     if (emitted > 0) {
         // Merge with previous batch if same texture and same render state
-        if (!s_batches.empty() &&
-            s_batches.back().texture == texture &&
-            s_batches.back().blendEnabled == rs.blendEnabled &&
-            s_batches.back().srcBlend == rs.srcBlend &&
-            s_batches.back().dstBlend == rs.dstBlend &&
-            s_batches.back().alphaTestEnabled == rs.alphaTestEnabled &&
-            s_batches.back().depthWriteEnabled == rs.depthWriteEnabled) {
+        bool canMerge = false;
+        if (!s_batches.empty()) {
+            const auto& prev = s_batches.back();
+            canMerge = prev.texture == texture &&
+                prev.rs.blendEnabled == rs.blendEnabled &&
+                prev.rs.srcBlend == rs.srcBlend &&
+                prev.rs.dstBlend == rs.dstBlend &&
+                prev.rs.alphaTestEnabled == rs.alphaTestEnabled &&
+                prev.rs.depthWriteEnabled == rs.depthWriteEnabled &&
+                prev.rs.stage0ColorOp == rs.stage0ColorOp &&
+                prev.rs.stage1ColorOp == rs.stage1ColorOp &&
+                prev.rs.stage0Arg1 == rs.stage0Arg1 &&
+                prev.rs.stage0Arg2 == rs.stage0Arg2 &&
+                prev.rs.stage1Arg1 == rs.stage1Arg1 &&
+                prev.rs.stage1Arg2 == rs.stage1Arg2 &&
+                prev.rs.stage0AlphaOp == rs.stage0AlphaOp &&
+                prev.rs.stage0AlphaArg1 == rs.stage0AlphaArg1 &&
+                prev.rs.stage0AlphaArg2 == rs.stage0AlphaArg2 &&
+                prev.rs.stage0TexCoordIdx == rs.stage0TexCoordIdx &&
+                prev.rs.stage1TexCoordIdx == rs.stage1TexCoordIdx &&
+                prev.rs.textureFactor == rs.textureFactor &&
+                prev.rs.texture2 == rs.texture2;
+        }
+        if (canMerge) {
             s_batches.back().vertexCount += emitted;
         } else {
             DrawBatch b;
             b.texture = texture;
             b.startVertex = startVert;
             b.vertexCount = emitted;
-            b.blendEnabled = rs.blendEnabled;
-            b.srcBlend = rs.srcBlend;
-            b.dstBlend = rs.dstBlend;
-            b.alphaTestEnabled = rs.alphaTestEnabled;
-            b.alphaRef = rs.alphaRef;
-            b.depthWriteEnabled = rs.depthWriteEnabled;
+            b.rs = rs;
             s_batches.push_back(b);
         }
     }

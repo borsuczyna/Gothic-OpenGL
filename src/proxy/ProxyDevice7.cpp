@@ -27,6 +27,30 @@ static DWORD CalcFVFStride(DWORD fvf) {
     return stride;
 }
 
+WorldReconstructor::BatchRenderState StubDirect3DDevice7::BuildBatchRS() {
+    WorldReconstructor::BatchRenderState rs = {};
+    rs.blendEnabled    = alphaBlendEnabled;
+    rs.srcBlend        = (uint8_t)srcBlend;
+    rs.dstBlend        = (uint8_t)dstBlend;
+    rs.alphaTestEnabled = alphaTestEnabled;
+    rs.alphaRef        = (float)alphaRef / 255.0f;
+    rs.depthWriteEnabled = zWriteEnabled;
+    rs.stage0ColorOp   = VkRenderer::GetStage0ColorOp();
+    rs.stage1ColorOp   = VkRenderer::GetStage1ColorOp();
+    rs.stage0Arg1      = VkRenderer::GetStage0Arg1();
+    rs.stage0Arg2      = VkRenderer::GetStage0Arg2();
+    rs.stage1Arg1      = VkRenderer::GetStage1Arg1();
+    rs.stage1Arg2      = VkRenderer::GetStage1Arg2();
+    rs.stage0AlphaOp   = VkRenderer::GetStage0AlphaOp();
+    rs.stage0AlphaArg1 = VkRenderer::GetStage0AlphaArg1();
+    rs.stage0AlphaArg2 = VkRenderer::GetStage0AlphaArg2();
+    rs.stage0TexCoordIdx = VkRenderer::GetStage0TexCoordIdx();
+    rs.stage1TexCoordIdx = VkRenderer::GetStage1TexCoordIdx();
+    rs.textureFactor   = textureFactor;
+    rs.texture2        = VkRenderer::GetBoundTexture2();
+    return rs;
+}
+
 void StubDirect3DDevice7::EnsureContext() {
     if (!contextAcquired) {
         if (GVulkan_IsReady()) {
@@ -256,10 +280,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitive(D3DPRIMITIVETYPE ty
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
             tex = boundTextures[0]->GetVkTexture();
         }
-        WorldReconstructor::BatchRenderState rs = {
-            alphaBlendEnabled, (uint8_t)srcBlend, (uint8_t)dstBlend,
-            alphaTestEnabled, (float)alphaRef / 255.0f, zWriteEnabled
-        };
+        auto rs = BuildBatchRS();
         WorldReconstructor::CaptureDrawCall(type, fvf, verts, count, nullptr, 0,
             (const float*)&worldMatrix, tex, rs);
     }
@@ -276,10 +297,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitive(D3DPRIMITIVE
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
             tex = boundTextures[0]->GetVkTexture();
         }
-        WorldReconstructor::BatchRenderState rs = {
-            alphaBlendEnabled, (uint8_t)srcBlend, (uint8_t)dstBlend,
-            alphaTestEnabled, (float)alphaRef / 255.0f, zWriteEnabled
-        };
+        auto rs = BuildBatchRS();
         WorldReconstructor::CaptureDrawCall(type, fvf, verts, vertCount, indices, idxCount,
             (const float*)&worldMatrix, tex, rs);
     }
@@ -313,10 +331,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawPrimitiveVB(D3DPRIMITIVETYPE 
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
             tex = boundTextures[0]->GetVkTexture();
         }
-        WorldReconstructor::BatchRenderState rs = {
-            alphaBlendEnabled, (uint8_t)srcBlend, (uint8_t)dstBlend,
-            alphaTestEnabled, (float)alphaRef / 255.0f, zWriteEnabled
-        };
+        auto rs = BuildBatchRS();
         WorldReconstructor::CaptureDrawCall(type, fvf, verts, numVertices, nullptr, 0,
             (const float*)&worldMatrix, tex, rs);
     }
@@ -347,10 +362,7 @@ HRESULT STDMETHODCALLTYPE StubDirect3DDevice7::DrawIndexedPrimitiveVB(D3DPRIMITI
             if (boundTextures[0]->IsTextureDirty()) boundTextures[0]->UploadTextureToVk();
             tex = boundTextures[0]->GetVkTexture();
         }
-        WorldReconstructor::BatchRenderState rs = {
-            alphaBlendEnabled, (uint8_t)srcBlend, (uint8_t)dstBlend,
-            alphaTestEnabled, (float)alphaRef / 255.0f, zWriteEnabled
-        };
+        auto rs = BuildBatchRS();
         WorldReconstructor::CaptureDrawCall(type, fvf, verts, numVertices, indices, idxCount,
             (const float*)&worldMatrix, tex, rs);
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d.h>
+#include "../renderer/WorldReconstructor.h"
 
 class StubDirectDrawSurface7;
 
@@ -28,6 +29,7 @@ class StubDirect3DDevice7 : public IDirect3DDevice7 {
 
     void EnsureContext();
     void InitIdentityMatrix(D3DMATRIX& m);
+    WorldReconstructor::BatchRenderState BuildBatchRS();
 
 public:
     StubDirect3DDevice7();
