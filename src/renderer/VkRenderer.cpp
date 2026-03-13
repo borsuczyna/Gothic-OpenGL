@@ -1327,13 +1327,9 @@ void DrawReconstructedWorld() {
         s_curVerts[s_vertexOffset++] = gv;
     }
 
-    // Build VP = View * Projection(FOV 90)
-    float aspect = (float)s_windowW / (float)s_windowH;
-    float proj[16];
-    MakePerspectiveLH(proj, 3.14159265f * 0.5f, aspect, 1.0f, 50000.0f);
-
+    // Build VP = View * Gothic's projection (matches Gothic's BSP/portal culling frustum)
     float vp[16];
-    MatMul(vp, s_viewMatrix, proj);
+    MatMul(vp, s_viewMatrix, s_projMatrix);
 
     // Flip Y for Vulkan NDC
     vp[1]  = -vp[1];
