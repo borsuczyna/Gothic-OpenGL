@@ -98,6 +98,21 @@ static WorldVertex ExtractWorldVertex(const unsigned char* ptr, DWORD fvf) {
     return wv;
 }
 
+// Transform a vertex position from model space to world space in-place using a
+// D3D row-major world matrix.  D3D convention: v' = v * M  (row vector on left).
+// Input: wv.x/y/z are model-space coordinates.
+// Output: wv.x/y/z are overwritten with absolute world-space coordinates.
+// As a flat row-major array m[16]:
+//   world_x = v.x*m[0] + v.y*m[4] + v.z*m[8]  + m[12]
+//   world_y = v.x*m[1] + v.y*m[5] + v.z*m[9]  + m[13]
+//   world_z = v.x*m[2] + v.y*m[6] + v.z*m[10] + m[14]
+static inline void TransformVertexByWorld(WorldVertex& wv, const float* m) {
+    float x = wv.x, y = wv.y, z = wv.z;
+    wv.x = x*m[0]  + y*m[4]  + z*m[8]  + m[12];
+    wv.y = x*m[1]  + y*m[5]  + z*m[9]  + m[13];
+    wv.z = x*m[2]  + y*m[6]  + z*m[10] + m[14];
+}
+
 // Emit one triangle into the accumulator
 static inline void EmitTriangle(const WorldVertex& a, const WorldVertex& b, const WorldVertex& c) {
     s_worldVerts.push_back(a);
@@ -132,8 +147,14 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
     const unsigned char* src = (const unsigned char*)vertices;
     uint32_t startVert = (uint32_t)s_worldVerts.size();
 
+    // Extract a vertex and immediately transform its position to absolute world
+    // space using the D3D row-major world matrix (v' = v * M convention).
+    // All batches are therefore stored in world space; the GPU only needs to
+    // apply View and Projection (world matrix = identity in the shader).
     auto getVert = [&](DWORD i) -> WorldVertex {
-        return ExtractWorldVertex(src + i * stride, fvf);
+        WorldVertex wv = ExtractWorldVertex(src + i * stride, fvf);
+        TransformVertexByWorld(wv, worldMatrix);
+        return wv;
     };
 
     if (indices && indexCount > 0) {
@@ -193,7 +214,9 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
 
     uint32_t emitted = (uint32_t)s_worldVerts.size() - startVert;
     if (emitted > 0) {
-        // Merge with previous batch if same texture and same render state
+        // Vertices are now in world space — merge with previous batch when
+        // texture and all render state match (world matrix is no longer a
+        // discriminant since every batch uses an identity world matrix).
         bool canMerge = false;
         if (!s_batches.empty()) {
             const auto& prev = s_batches.back();
@@ -217,7 +240,7 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
                 prev.rs.textureFactor == rs.textureFactor &&
                 prev.rs.texture2 == rs.texture2;
         }
-        if (canMerge && memcmp(s_batches.back().worldMatrix, worldMatrix, 64) == 0) {
+        if (canMerge) {
             s_batches.back().vertexCount += emitted;
         } else {
             DrawBatch b;
@@ -225,7 +248,6 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
             b.startVertex = startVert;
             b.vertexCount = emitted;
             b.rs = rs;
-            memcpy(b.worldMatrix, worldMatrix, 64);
             s_batches.push_back(b);
         }
     }
