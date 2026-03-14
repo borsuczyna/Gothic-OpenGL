@@ -64,7 +64,7 @@ struct Gothic_XYZRHW_DIF_SPEC_T1_Vertex {
 /* ── Push constants ───────────────────────────────────────────────────── */
 
 struct PushConstants {
-    float    mvp[16] = {};
+    float    world[16] = {};            // World (model-to-world) matrix — shader does the full W*V*P transform
     uint32_t flags = 0;              // bit0=hasTex0, bit1=alphaTest, bit2=hasTex1,
                                      // bit3=texHasAlpha, bit4=timecycle, bit5=isRHW
     float    alphaRef = 0;

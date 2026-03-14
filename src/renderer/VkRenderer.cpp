@@ -41,6 +41,15 @@ static float s_viewMatrix[16];
 static float s_projMatrix[16];
 static bool  s_in2DMode = true;
 
+// Camera state extracted from Gothic's view matrix
+static float s_camPos[3]   = {0, 0, 0};
+static float s_camRight[3] = {1, 0, 0};
+static float s_camUp[3]    = {0, 1, 0};
+static float s_camFwd[3]   = {0, 0, 1};
+static float s_gothicFovRad = 1.2217f;   // extracted from Gothic's projection matrix (default ~70°)
+static const float OWN_NEAR    = 1.0f;
+static const float OWN_FAR     = 20000.0f;
+
 static DWORD s_vpX = 0, s_vpY = 0, s_vpW = 800, s_vpH = 600;
 
 static bool  s_blendEnabled     = false;
@@ -104,6 +113,14 @@ static VkDescriptorSetLayout s_descSetLayout = VK_NULL_HANDLE;
 static VkPipelineLayout      s_pipelineLayout = VK_NULL_HANDLE;
 static VkDescriptorPool      s_descPool       = VK_NULL_HANDLE;
 
+// Per-frame UBO for View + Projection matrices (shader does all matrix math)
+struct ViewProjUBO { float view[16]; float proj[16]; };
+static VkDescriptorSetLayout s_uboLayout = VK_NULL_HANDLE;
+static VkBuffer              s_uboBuffer[MAX_FRAMES] = {};
+static VmaAllocation         s_uboAlloc[MAX_FRAMES]  = {};
+static ViewProjUBO*          s_uboMapped[MAX_FRAMES]  = {};
+static VkDescriptorSet       s_uboDescSet[MAX_FRAMES] = {};
+
 static PipelineCache s_pipelineCache;
 
 static VkShaderModule s_vertModule = VK_NULL_HANDLE;
@@ -137,6 +154,67 @@ static void Transpose(float* out, const float* in) {
     for (int r = 0; r < 4; r++)
         for (int c = 0; c < 4; c++)
             out[c * 4 + r] = in[r * 4 + c];
+}
+
+// Build a left-handed perspective projection matrix (row-major, D3D convention)
+// Depth range [0, 1], matching D3D/Vulkan.
+static void MakePerspectiveLH(float* out, float fovYRad, float aspect, float zn, float zf) {
+    memset(out, 0, 16 * sizeof(float));
+    float yscale = 1.0f / tanf(fovYRad * 0.5f);
+    float xscale = yscale / aspect;
+    out[0]  = xscale;
+    out[5]  = yscale;
+    out[10] = zf / (zf - zn);
+    out[11] = 1.0f;
+    out[14] = -zn * zf / (zf - zn);
+}
+
+// Extract camera position and orientation from Gothic's D3D row-major view matrix
+// D3D row-vector convention: v_view = v_world * V
+// V = [ R  | 0 ]   where rows of R = camera axes in world space
+//     [ T  | 1 ]   T = -eye * R
+static void ExtractCameraFromViewMatrix(const float* v) {
+    // Camera axes are the rows of the 3x3 rotation submatrix
+    s_camRight[0] = v[0]; s_camRight[1] = v[1]; s_camRight[2] = v[2];
+    s_camUp[0]    = v[4]; s_camUp[1]    = v[5]; s_camUp[2]    = v[6];
+    s_camFwd[0]   = v[8]; s_camFwd[1]   = v[9]; s_camFwd[2]   = v[10];
+
+    // Camera position: pos = -(T * R^T)
+    float tx = v[12], ty = v[13], tz = v[14];
+    s_camPos[0] = -(tx * v[0] + ty * v[4] + tz * v[8]);
+    s_camPos[1] = -(tx * v[1] + ty * v[5] + tz * v[9]);
+    s_camPos[2] = -(tx * v[2] + ty * v[6] + tz * v[10]);
+}
+
+// Build a left-handed view matrix (row-major, D3D convention) from camera pos + axes
+static void BuildViewMatrixLH(float* out,
+                              const float* pos,
+                              const float* right,
+                              const float* up,
+                              const float* fwd) {
+    memset(out, 0, 64);
+    out[0]  = right[0]; out[1]  = up[0]; out[2]  = fwd[0];
+    out[4]  = right[1]; out[5]  = up[1]; out[6]  = fwd[1];
+    out[8]  = right[2]; out[9]  = up[2]; out[10] = fwd[2];
+    out[12] = -(right[0]*pos[0] + right[1]*pos[1] + right[2]*pos[2]);
+    out[13] = -(up[0]*pos[0]    + up[1]*pos[1]    + up[2]*pos[2]);
+    out[14] = -(fwd[0]*pos[0]   + fwd[1]*pos[1]   + fwd[2]*pos[2]);
+    out[15] = 1.0f;
+}
+
+// Build own View + Projection from extracted camera and upload to UBO
+static void UpdateOwnMatrices() {
+    if (!s_uboMapped[s_frameIndex]) return;
+
+    float ownView[16];
+    BuildViewMatrixLH(ownView, s_camPos, s_camRight, s_camUp, s_camFwd);
+
+    float aspect = (s_gameH > 0) ? (float)s_gameW / (float)s_gameH : 1.333f;
+    float ownProj[16];
+    MakePerspectiveLH(ownProj, s_gothicFovRad, aspect, OWN_NEAR, OWN_FAR);
+
+    memcpy(s_uboMapped[s_frameIndex]->view, ownView, 64);
+    memcpy(s_uboMapped[s_frameIndex]->proj, ownProj, 64);
 }
 
 static VkShaderModule CreateShaderModule(const uint32_t* code, size_t sizeBytes) {
@@ -543,32 +621,75 @@ void Init() {
     dslci.pBindings = &samplerBinding;
     vkCreateDescriptorSetLayout(device, &dslci, nullptr, &s_descSetLayout);
 
+    // UBO descriptor set layout (set 2) for View + Projection matrices
+    VkDescriptorSetLayoutBinding uboBinding = {};
+    uboBinding.binding = 0;
+    uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboBinding.descriptorCount = 1;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo uboDslci = {};
+    uboDslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    uboDslci.bindingCount = 1;
+    uboDslci.pBindings = &uboBinding;
+    vkCreateDescriptorSetLayout(device, &uboDslci, nullptr, &s_uboLayout);
+
     VkPushConstantRange pcRange = {};
     pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
     pcRange.size = sizeof(PushConstants);
 
-    VkDescriptorSetLayout setLayouts[2] = { s_descSetLayout, s_descSetLayout };
+    VkDescriptorSetLayout setLayouts[3] = { s_descSetLayout, s_descSetLayout, s_uboLayout };
 
     VkPipelineLayoutCreateInfo plci = {};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plci.setLayoutCount = 2;
+    plci.setLayoutCount = 3;
     plci.pSetLayouts = setLayouts;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcRange;
     vkCreatePipelineLayout(device, &plci, nullptr, &s_pipelineLayout);
 
-    VkDescriptorPoolSize poolSize = {};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 4096;
+    VkDescriptorPoolSize poolSizes[2] = {};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 4096;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = MAX_FRAMES;
 
     VkDescriptorPoolCreateInfo dpci = {};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    dpci.maxSets = 4096;
-    dpci.poolSizeCount = 1;
-    dpci.pPoolSizes = &poolSize;
+    dpci.maxSets = 4096 + MAX_FRAMES;
+    dpci.poolSizeCount = 2;
+    dpci.pPoolSizes = poolSizes;
     vkCreateDescriptorPool(device, &dpci, nullptr, &s_descPool);
+
+    // Create per-frame UBO buffers and descriptor sets for View+Proj matrices
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        CreateBuffer(sizeof(ViewProjUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                     VMA_MEMORY_USAGE_CPU_TO_GPU, s_uboBuffer[i], s_uboAlloc[i],
+                     (void**)&s_uboMapped[i]);
+
+        VkDescriptorSetAllocateInfo uboAi = {};
+        uboAi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        uboAi.descriptorPool = s_descPool;
+        uboAi.descriptorSetCount = 1;
+        uboAi.pSetLayouts = &s_uboLayout;
+        vkAllocateDescriptorSets(device, &uboAi, &s_uboDescSet[i]);
+
+        VkDescriptorBufferInfo bufInfo = {};
+        bufInfo.buffer = s_uboBuffer[i];
+        bufInfo.offset = 0;
+        bufInfo.range = sizeof(ViewProjUBO);
+
+        VkWriteDescriptorSet uboWrite = {};
+        uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        uboWrite.dstSet = s_uboDescSet[i];
+        uboWrite.dstBinding = 0;
+        uboWrite.descriptorCount = 1;
+        uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboWrite.pBufferInfo = &bufInfo;
+        vkUpdateDescriptorSets(device, 1, &uboWrite, 0, nullptr);
+    }
 
     s_defaultSampler = CreateSampler(1);
     CreateWhiteTexture();
@@ -612,8 +733,13 @@ void Shutdown() {
 
     s_pipelineCache.clear(device);
 
+    for (int i = 0; i < MAX_FRAMES; i++) {
+        if (s_uboBuffer[i]) vmaDestroyBuffer(GVulkan_GetAllocator(), s_uboBuffer[i], s_uboAlloc[i]);
+    }
+
     if (s_defaultSampler)   vkDestroySampler(device, s_defaultSampler, nullptr);
     if (s_pipelineLayout)   vkDestroyPipelineLayout(device, s_pipelineLayout, nullptr);
+    if (s_uboLayout)        vkDestroyDescriptorSetLayout(device, s_uboLayout, nullptr);
     if (s_descSetLayout)    vkDestroyDescriptorSetLayout(device, s_descSetLayout, nullptr);
     if (s_descPool)         vkDestroyDescriptorPool(device, s_descPool, nullptr);
     if (s_vertModule)       vkDestroyShaderModule(device, s_vertModule, nullptr);
@@ -911,8 +1037,18 @@ void SetStageTexCoordIndex(int stage, DWORD value) {
 }
 
 void SetWorldMatrix(const float* m)      { memcpy(s_worldMatrix, m, 64); }
-void SetViewMatrix(const float* m)       { memcpy(s_viewMatrix, m, 64); }
-void SetProjectionMatrix(const float* m) { memcpy(s_projMatrix, m, 64); }
+void SetViewMatrix(const float* m) {
+    memcpy(s_viewMatrix, m, 64);
+    ExtractCameraFromViewMatrix(m);
+    UpdateOwnMatrices();
+}
+void SetProjectionMatrix(const float* m) {
+    memcpy(s_projMatrix, m, 64);
+    // Extract FOV from Gothic's projection: proj[5] = 1/tan(fovY/2)
+    if (m[5] > 0.001f)
+        s_gothicFovRad = 2.0f * atanf(1.0f / m[5]);
+    UpdateOwnMatrices();
+}
 
 void SetViewport(DWORD x, DWORD y, DWORD w, DWORD h) {
     s_vpX = x; s_vpY = y; s_vpW = w; s_vpH = h;
@@ -1098,27 +1234,11 @@ static void ConvertFanToList(const unsigned char* srcVerts, DWORD fvf, DWORD str
     }
 }
 
-static void ComputeMVP(float* mvp, bool isRHW) {
+static void FillWorldMatrix(float* dst, bool isRHW) {
     if (isRHW) {
-        // XYZRHW: the vertex shader does TransformXYZRHW (matching GD3D11's
-        // VS_TransformedEx.hlsl), so we pass identity as the MVP.
-        MakeIdentity(mvp);
+        MakeIdentity(dst);
     } else {
-        float wvp[16], tmp[16];
-
-        MatMul(tmp, s_worldMatrix, s_viewMatrix);
-        MatMul(wvp, tmp, s_projMatrix);
-
-        // D3D row-major WVP passed to GLSL column-major is an implicit transpose,
-        // which is exactly the conversion from row-vector (v*M) to column-vector (M^T*v).
-        // No explicit Transpose needed -- just negate column 1 of the row-major matrix
-        // to flip Vulkan's inverted Y clip space.
-        wvp[1]  = -wvp[1];
-        wvp[5]  = -wvp[5];
-        wvp[9]  = -wvp[9];
-        wvp[13] = -wvp[13];
-
-        memcpy(mvp, wvp, 64);
+        memcpy(dst, s_worldMatrix, 64);
     }
 }
 
@@ -1193,7 +1313,7 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
     }
 
     PushConstants pc = {};
-    ComputeMVP(pc.mvp, isRHW);
+    FillWorldMatrix(pc.world, isRHW);
     pc.flags = 0;
     if (s_boundTexture) pc.flags |= 1;
     if (s_alphaTestEnabled) pc.flags |= 2;
@@ -1292,6 +1412,8 @@ static void EmitDrawCall(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
 
     vkCmdBindDescriptorSets(s_cmdBufs[s_frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
                             s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+    vkCmdBindDescriptorSets(s_cmdBufs[s_frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            s_pipelineLayout, 2, 1, &s_uboDescSet[s_frameIndex], 0, nullptr);
 
     vkCmdSetViewport(s_cmdBufs[s_frameIndex], 0, 1, &vp);
     vkCmdSetScissor(s_cmdBufs[s_frameIndex], 0, 1, &scissor);
@@ -1315,21 +1437,6 @@ void DrawPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices, DWORD
 void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices,
                           DWORD vertexCount, const WORD* indices, DWORD indexCount) {
     EmitDrawCall(type, fvf, vertices, vertexCount, indices, indexCount);
-}
-
-// ---------------------------------------------------------------------------
-// Build a left-handed perspective projection matrix (row-major, D3D convention)
-// Depth range [0, 1], matching D3D/Vulkan.
-// ---------------------------------------------------------------------------
-static void MakePerspectiveLH(float* out, float fovYRad, float aspect, float zn, float zf) {
-    memset(out, 0, 16 * sizeof(float));
-    float yscale = 1.0f / tanf(fovYRad * 0.5f);
-    float xscale = yscale / aspect;
-    out[0]  = xscale;
-    out[5]  = yscale;
-    out[10] = zf / (zf - zn);
-    out[11] = 1.0f;
-    out[14] = -zn * zf / (zf - zn);
 }
 
 void NotifyWorldDraw() { s_hasWorldDraws = true; }
@@ -1365,15 +1472,8 @@ void DrawReconstructedWorld() {
             s_curVerts[s_vertexOffset++] = gv;
         }
 
-        // Build VP = View * Gothic's projection (matches Gothic's BSP/portal culling frustum)
-        float vp[16];
-        MatMul(vp, s_viewMatrix, s_projMatrix);
-
-        // Flip Y for Vulkan NDC
-        vp[1]  = -vp[1];
-        vp[5]  = -vp[5];
-        vp[9]  = -vp[9];
-        vp[13] = -vp[13];
+        // Ensure UBO has our own View+Proj for this frame
+        UpdateOwnMatrices();
 
         // Bind vertex buffer (all vertices are contiguous)
         VkDeviceSize vbOffset = uploadStart * sizeof(GVertex);
@@ -1409,9 +1509,9 @@ void DrawReconstructedWorld() {
                 lastPipeline = pipeline;
             }
 
-            // Build push constants matching EmitDrawCall's logic for 3D draws
+            // Pass raw world matrix — shader does all W*V*P multiplication
             PushConstants pc = {};
-            memcpy(pc.mvp, vp, 64);
+            memcpy(pc.world, batch.worldMatrix, 64);
 
             pc.flags = 0;
             if (batch.texture)   pc.flags |= 1;  // bit0 = hasTex0
@@ -1451,6 +1551,8 @@ void DrawReconstructedWorld() {
                           ? rs.texture2->descSet : s_whiteTex.descSet;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     s_pipelineLayout, 0, 2, descSets, 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    s_pipelineLayout, 2, 1, &s_uboDescSet[s_frameIndex], 0, nullptr);
 
             // Set viewport scaled to swapchain (matching EmitDrawCall's 3D path)
             VkViewport viewport = {};
@@ -1481,6 +1583,8 @@ void DrawReconstructedWorld() {
                            0, sizeof(PushConstants), &d.pc);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 s_pipelineLayout, 0, 2, d.descSets, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                s_pipelineLayout, 2, 1, &s_uboDescSet[s_frameIndex], 0, nullptr);
         vkCmdSetViewport(cmd, 0, 1, &d.viewport);
         vkCmdSetScissor(cmd, 0, 1, &d.scissor);
 

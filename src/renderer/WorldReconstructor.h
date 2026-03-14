@@ -50,6 +50,7 @@ struct DrawBatch {
     uint32_t startVertex;
     uint32_t vertexCount;
     BatchRenderState rs;
+    float worldMatrix[16]; // model-to-world transform for this batch
 };
 
 // Call at the start of each frame (BeginScene) to clear accumulated data

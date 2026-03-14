@@ -1,7 +1,7 @@
 #version 450
 
 layout(push_constant) uniform PushConstants {
-    mat4 mvp;
+    mat4 world;
     uint flags;
     float alphaRef;
     uint stage0ColorOp;
@@ -19,6 +19,12 @@ layout(push_constant) uniform PushConstants {
     float vpSizeW;
     float vpSizeH;
 } pc;
+
+// View and Projection matrices in a per-frame UBO — all matrix math happens here in the shader
+layout(std140, set = 2, binding = 0) uniform ViewProjUBO {
+    mat4 view;
+    mat4 proj;
+} vp;
 
 // Matching GD3D11's ExVertexStruct / VS_INPUT layout
 layout(location = 0) in vec3 inPosition;    // Position
@@ -41,7 +47,6 @@ void main() {
 
         // Convert viewport pixel coordinates to NDC
         // Vulkan NDC: X [-1,+1] left-to-right, Y [-1,+1] top-to-bottom
-        // (D3D11 flips Y because its NDC has Y up; Vulkan Y already matches screen Y)
         vec2 ndc_xy;
         ndc_xy.x = ((2.0 * (inPosition.x - pc.vpPosX)) / pc.vpSizeW) - 1.0;
         ndc_xy.y = ((2.0 * (inPosition.y - pc.vpPosY)) / pc.vpSizeH) - 1.0;
@@ -51,8 +56,15 @@ void main() {
         float actualW = 1.0 / rhw;
         gl_Position = vec4(ndc_xy * actualW, ndc_z * actualW, actualW);
     } else {
-        // Standard 3D transform (MVP computed on CPU like GD3D11's VS_Ex.hlsl)
-        gl_Position = pc.mvp * vec4(inPosition, 1.0);
+        // Full 3D transform: World * View * Projection — all done here in the shader
+        // D3D row-major matrices memcpy'd into GLSL column-major mat4 = implicit transpose,
+        // so GLSL's (M * v) equals D3D's (v * M).  Multiply order: proj * view * world * pos
+        vec4 worldPos = pc.world * vec4(inPosition, 1.0);
+        vec4 viewPos  = vp.view  * worldPos;
+        gl_Position   = vp.proj  * viewPos;
+
+        // Flip Y for Vulkan NDC (Vulkan Y is inverted vs D3D clip space)
+        gl_Position.y = -gl_Position.y;
     }
 
     // Unpack D3DCOLOR (ARGB packed DWORD) to vec4 RGBA

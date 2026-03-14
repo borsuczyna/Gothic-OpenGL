@@ -1,7 +1,7 @@
 #version 450
 
 layout(push_constant) uniform PushConstants {
-    mat4 mvp;
+    mat4 world;
     uint flags;
     float alphaRef;
     uint stage0ColorOp;

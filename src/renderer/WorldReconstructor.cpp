@@ -15,16 +15,6 @@ static ULONGLONG s_lastPrintMs = 0;
 static constexpr size_t RESERVE_SIZE = 65536;
 
 // ---------------------------------------------------------------------------
-// Transform a point by a row-major 4x4 matrix (D3D row-vector convention)
-// ---------------------------------------------------------------------------
-static void TransformPoint(float px, float py, float pz, const float* m,
-                           float& ox, float& oy, float& oz) {
-    ox = px * m[0] + py * m[4] + pz * m[8]  + m[12];
-    oy = px * m[1] + py * m[5] + pz * m[9]  + m[13];
-    oz = px * m[2] + py * m[6] + pz * m[10] + m[14];
-}
-
-// ---------------------------------------------------------------------------
 // FVF helpers
 // ---------------------------------------------------------------------------
 static DWORD CalcFVFStride(DWORD fvf) {
@@ -72,14 +62,13 @@ static DWORD CalcUVOffset(DWORD fvf) {
     return offset;
 }
 
-// Extract world-space vertex with UV, UV2, and color from raw FVF data
-static WorldVertex ExtractWorldVertex(const unsigned char* ptr, DWORD fvf,
-                                      const float* worldMatrix) {
+// Extract model-space vertex with UV, UV2, and color from raw FVF data
+// Positions are stored in model space; the world matrix is applied on the GPU.
+static WorldVertex ExtractWorldVertex(const unsigned char* ptr, DWORD fvf) {
     WorldVertex wv;
-    float px = *(const float*)(ptr + 0);
-    float py = *(const float*)(ptr + 4);
-    float pz = *(const float*)(ptr + 8);
-    TransformPoint(px, py, pz, worldMatrix, wv.x, wv.y, wv.z);
+    wv.x = *(const float*)(ptr + 0);
+    wv.y = *(const float*)(ptr + 4);
+    wv.z = *(const float*)(ptr + 8);
 
     if (fvf & D3DFVF_DIFFUSE) {
         wv.color = *(const uint32_t*)(ptr + CalcColorOffset(fvf));
@@ -144,7 +133,7 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
     uint32_t startVert = (uint32_t)s_worldVerts.size();
 
     auto getVert = [&](DWORD i) -> WorldVertex {
-        return ExtractWorldVertex(src + i * stride, fvf, worldMatrix);
+        return ExtractWorldVertex(src + i * stride, fvf);
     };
 
     if (indices && indexCount > 0) {
@@ -228,7 +217,7 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
                 prev.rs.textureFactor == rs.textureFactor &&
                 prev.rs.texture2 == rs.texture2;
         }
-        if (canMerge) {
+        if (canMerge && memcmp(s_batches.back().worldMatrix, worldMatrix, 64) == 0) {
             s_batches.back().vertexCount += emitted;
         } else {
             DrawBatch b;
@@ -236,6 +225,7 @@ void CaptureDrawCall(D3DPRIMITIVETYPE primType,
             b.startVertex = startVert;
             b.vertexCount = emitted;
             b.rs = rs;
+            memcpy(b.worldMatrix, worldMatrix, 64);
             s_batches.push_back(b);
         }
     }
