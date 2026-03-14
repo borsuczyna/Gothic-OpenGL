@@ -1445,6 +1445,11 @@ void DrawReconstructedWorld() {
         float sx = (float)ext.width  / (float)s_gameW;
         float sy = (float)ext.height / (float)s_gameH;
 
+        // Identity world matrix — vertices are already in world space.
+        // Computed once and reused for every batch to avoid per-batch overhead.
+        float identityWorld[16] = {};
+        MakeIdentity(identityWorld);
+
         // Draw each batch with its own texture and full render state
         for (const auto& batch : batches) {
             // Skip batches that exceed what we uploaded
@@ -1468,9 +1473,11 @@ void DrawReconstructedWorld() {
                 lastPipeline = pipeline;
             }
 
-            // Pass raw world matrix — shader does all W*V*P multiplication
+            // Vertices are already in absolute world space (CPU-transformed at
+            // capture time), so the shader only needs View * Projection.
+            // Use the pre-built identity world matrix.
             PushConstants pc = {};
-            memcpy(pc.world, batch.worldMatrix, 64);
+            memcpy(pc.world, identityWorld, sizeof(identityWorld));
 
             pc.flags = 0;
             if (batch.texture)   pc.flags |= 1;  // bit0 = hasTex0

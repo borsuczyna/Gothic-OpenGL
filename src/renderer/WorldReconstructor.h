@@ -1,11 +1,15 @@
 #pragma once
 // WorldReconstructor.h — Captures drawn triangles and reconstructs world positions
 //
-// Per draw call, vertices are transformed from their input space to world space:
-//   - XYZ vertices:    world_pos = vertex * WorldMatrix
-//   - XYZRHW vertices: skipped (2D UI elements)
+// Per draw call, each vertex's position is immediately transformed from model
+// space to absolute world space on the CPU using the current D3D world matrix
+// (D3D convention: v' = v * M, row-major).  All accumulated vertices are
+// therefore in consistent world space.
 //
-// Triangle topology is preserved for 3D rendering.
+// The shader only needs to apply View and Projection; the world matrix push
+// constant is always identity for reconstructed world draws.
+//
+// Pre-transformed (XYZRHW) vertices are skipped as they belong to the 2D UI.
 // Accumulated triangles are rendered via VkRenderer::DrawReconstructedWorld().
 
 #include <cstdint>
@@ -50,7 +54,8 @@ struct DrawBatch {
     uint32_t startVertex;
     uint32_t vertexCount;
     BatchRenderState rs;
-    float worldMatrix[16]; // model-to-world transform for this batch
+    // Vertices are pre-transformed to world space at capture time; no per-batch
+    // world matrix is needed.  The GPU applies View and Projection only.
 };
 
 // Call at the start of each frame (BeginScene) to clear accumulated data
