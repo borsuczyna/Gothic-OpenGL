@@ -41,14 +41,11 @@ static float s_viewMatrix[16];
 static float s_projMatrix[16];
 static bool  s_in2DMode = true;
 
-// Camera state extracted from Gothic's view matrix
-static float s_camPos[3]   = {0, 0, 0};
-static float s_camRight[3] = {1, 0, 0};
-static float s_camUp[3]    = {0, 1, 0};
-static float s_camFwd[3]   = {0, 0, 1};
-static float s_gothicFovRad = 1.2217f;   // extracted from Gothic's projection matrix (default ~70°)
-static const float OWN_NEAR    = 1.0f;
-static const float OWN_FAR     = 20000.0f;
+// Gothic's view+proj snapshotted at the first 3D world draw each frame.
+// Used verbatim for the 3D world pass so depth values match Gothic's
+// pre-computed XYZRHW (sprite) Z values exactly.
+static float s_snapViewMatrix[16];
+static float s_snapProjMatrix[16];
 
 static DWORD s_vpX = 0, s_vpY = 0, s_vpW = 800, s_vpH = 600;
 
@@ -169,52 +166,14 @@ static void MakePerspectiveLH(float* out, float fovYRad, float aspect, float zn,
     out[14] = -zn * zf / (zf - zn);
 }
 
-// Extract camera position and orientation from Gothic's D3D row-major view matrix
-// D3D row-vector convention: v_view = v_world * V
-// V = [ R  | 0 ]   where rows of R = camera axes in world space
-//     [ T  | 1 ]   T = -eye * R
-static void ExtractCameraFromViewMatrix(const float* v) {
-    // Camera axes are the rows of the 3x3 rotation submatrix
-    s_camRight[0] = v[0]; s_camRight[1] = v[1]; s_camRight[2] = v[2];
-    s_camUp[0]    = v[4]; s_camUp[1]    = v[5]; s_camUp[2]    = v[6];
-    s_camFwd[0]   = v[8]; s_camFwd[1]   = v[9]; s_camFwd[2]   = v[10];
 
-    // Camera position: pos = -(T * R^T)
-    float tx = v[12], ty = v[13], tz = v[14];
-    s_camPos[0] = -(tx * v[0] + ty * v[4] + tz * v[8]);
-    s_camPos[1] = -(tx * v[1] + ty * v[5] + tz * v[9]);
-    s_camPos[2] = -(tx * v[2] + ty * v[6] + tz * v[10]);
-}
-
-// Build a left-handed view matrix (row-major, D3D convention) from camera pos + axes
-static void BuildViewMatrixLH(float* out,
-                              const float* pos,
-                              const float* right,
-                              const float* up,
-                              const float* fwd) {
-    memset(out, 0, 64);
-    out[0]  = right[0]; out[1]  = up[0]; out[2]  = fwd[0];
-    out[4]  = right[1]; out[5]  = up[1]; out[6]  = fwd[1];
-    out[8]  = right[2]; out[9]  = up[2]; out[10] = fwd[2];
-    out[12] = -(right[0]*pos[0] + right[1]*pos[1] + right[2]*pos[2]);
-    out[13] = -(up[0]*pos[0]    + up[1]*pos[1]    + up[2]*pos[2]);
-    out[14] = -(fwd[0]*pos[0]   + fwd[1]*pos[1]   + fwd[2]*pos[2]);
-    out[15] = 1.0f;
-}
-
-// Build own View + Projection from extracted camera and upload to UBO
+// Upload Gothic's snapshotted view+proj to the per-frame UBO.
+// Using Gothic's exact matrices guarantees depth values produced by our
+// 3D world pass match Gothic's pre-computed XYZRHW sprite Z values.
 static void UpdateOwnMatrices() {
     if (!s_uboMapped[s_frameIndex]) return;
-
-    float ownView[16];
-    BuildViewMatrixLH(ownView, s_camPos, s_camRight, s_camUp, s_camFwd);
-
-    float aspect = (s_gameH > 0) ? (float)s_gameW / (float)s_gameH : 1.333f;
-    float ownProj[16];
-    MakePerspectiveLH(ownProj, s_gothicFovRad, aspect, OWN_NEAR, OWN_FAR);
-
-    memcpy(s_uboMapped[s_frameIndex]->view, ownView, 64);
-    memcpy(s_uboMapped[s_frameIndex]->proj, ownProj, 64);
+    memcpy(s_uboMapped[s_frameIndex]->view, s_snapViewMatrix, 64);
+    memcpy(s_uboMapped[s_frameIndex]->proj, s_snapProjMatrix, 64);
 }
 
 static VkShaderModule CreateShaderModule(const uint32_t* code, size_t sizeBytes) {
@@ -781,6 +740,9 @@ void BeginFrame(int windowW, int windowH, int gameW, int gameH) {
     s_frameActive = true;
     s_deferredRHW.clear();
     s_hasWorldDraws = false;
+    // Seed the snapshot with whatever matrices Gothic set before BeginScene
+    memcpy(s_snapViewMatrix, s_viewMatrix, 64);
+    memcpy(s_snapProjMatrix, s_projMatrix, 64);
     s_vertexOffset = 0;
     s_indexOffset = 0;
     s_curVerts  = s_vertexMapped[s_frameIndex];
@@ -1037,18 +999,8 @@ void SetStageTexCoordIndex(int stage, DWORD value) {
 }
 
 void SetWorldMatrix(const float* m)      { memcpy(s_worldMatrix, m, 64); }
-void SetViewMatrix(const float* m) {
-    memcpy(s_viewMatrix, m, 64);
-    ExtractCameraFromViewMatrix(m);
-    UpdateOwnMatrices();
-}
-void SetProjectionMatrix(const float* m) {
-    memcpy(s_projMatrix, m, 64);
-    // Extract FOV from Gothic's projection: proj[5] = 1/tan(fovY/2)
-    if (m[5] > 0.001f)
-        s_gothicFovRad = 2.0f * atanf(1.0f / m[5]);
-    UpdateOwnMatrices();
-}
+void SetViewMatrix(const float* m)       { memcpy(s_viewMatrix,  m, 64); }
+void SetProjectionMatrix(const float* m) { memcpy(s_projMatrix,  m, 64); }
 
 void SetViewport(DWORD x, DWORD y, DWORD w, DWORD h) {
     s_vpX = x; s_vpY = y; s_vpW = w; s_vpH = h;
@@ -1439,7 +1391,14 @@ void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, DWORD fvf, const void* vertices
     EmitDrawCall(type, fvf, vertices, vertexCount, indices, indexCount);
 }
 
-void NotifyWorldDraw() { s_hasWorldDraws = true; }
+void NotifyWorldDraw() {
+    if (!s_hasWorldDraws) {
+        // Freeze view+proj at the moment the first 3D draw is issued
+        memcpy(s_snapViewMatrix, s_viewMatrix, 64);
+        memcpy(s_snapProjMatrix, s_projMatrix, 64);
+    }
+    s_hasWorldDraws = true;
+}
 
 void DrawReconstructedWorld() {
     if (!s_frameActive) return;
